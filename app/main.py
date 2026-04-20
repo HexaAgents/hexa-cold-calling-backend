@@ -1,0 +1,54 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.config import settings
+from app.routers import auth, contacts, imports, calls, twilio_webhooks, sms, notes, settings as settings_router
+from app.tasks.sms_scheduler import run_sms_scheduler
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    task = asyncio.create_task(run_sms_scheduler())
+    yield
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
+app = FastAPI(
+    title="Hexa Cold Calling API",
+    version="1.0.0",
+    lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(auth.router)
+app.include_router(contacts.router)
+app.include_router(imports.router)
+app.include_router(calls.router)
+app.include_router(twilio_webhooks.router)
+app.include_router(sms.router)
+app.include_router(notes.router)
+app.include_router(settings_router.router)
+
+
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}

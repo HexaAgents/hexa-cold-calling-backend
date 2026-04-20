@@ -1,0 +1,75 @@
+from __future__ import annotations
+
+import logging
+
+from exa_py import Exa
+
+logger = logging.getLogger(__name__)
+
+MAX_TEXT_LENGTH = 8000
+MIN_USEFUL_LENGTH = 100
+
+
+def fetch_company_info(api_key: str, website: str, company_name: str) -> tuple[str, bool]:
+    """Fetch company info via Exa content extraction with search fallback.
+
+    Returns (extracted_text, success_bool).
+    """
+    if not website and not company_name:
+        return ("", False)
+
+    client = Exa(api_key=api_key)
+    text = ""
+
+    if website:
+        text = _extract_from_url(client, website)
+
+    if len(text) < MIN_USEFUL_LENGTH and company_name:
+        fallback = _search_fallback(client, company_name)
+        text = (text + "\n\n" + fallback).strip() if text else fallback
+
+    text = text[:MAX_TEXT_LENGTH]
+    return (text, len(text) >= MIN_USEFUL_LENGTH)
+
+
+def _extract_from_url(client: Exa, url: str) -> str:
+    combined: list[str] = []
+
+    main_text = _get_page(client, url)
+    if main_text:
+        combined.append(main_text)
+
+    about_text = _get_page(client, url.rstrip("/") + "/about")
+    if not about_text:
+        about_text = _get_page(client, url.rstrip("/") + "/about-us")
+    if about_text:
+        combined.append(about_text)
+
+    return "\n\n".join(combined)
+
+
+def _get_page(client: Exa, url: str) -> str:
+    try:
+        result = client.get_contents([url], text={"max_characters": 3000})
+        if result.results and result.results[0].text:
+            return result.results[0].text.strip()
+    except Exception as exc:
+        logger.warning("Exa content extraction failed for %s: %s", url, exc)
+    return ""
+
+
+def _search_fallback(client: Exa, company_name: str) -> str:
+    try:
+        query = f"{company_name} manufacturer distributor wholesaler"
+        result = client.search_and_contents(
+            query,
+            type="auto",
+            category="company",
+            num_results=3,
+            text={"max_characters": 3000},
+        )
+        parts = [r.text.strip() for r in result.results if r.text]
+        return "\n\n".join(parts)
+    except Exception as exc:
+        logger.warning("Exa search fallback failed for '%s': %s", company_name, exc)
+    return ""
