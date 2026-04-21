@@ -18,8 +18,8 @@ def generate_twilio_token(user_id: str) -> str:
     """Generate a Twilio Access Token for browser-based calling."""
     token = AccessToken(
         settings.twilio_account_sid,
-        settings.twilio_api_key if hasattr(settings, "twilio_api_key") else settings.twilio_account_sid,
-        settings.twilio_auth_token,
+        settings.twilio_api_key_sid,
+        settings.twilio_api_key_secret,
         identity=user_id,
     )
     voice_grant = VoiceGrant(

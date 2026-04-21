@@ -47,3 +47,28 @@ def login(body: LoginRequest, db: SupabaseDep):
 @router.get("/me")
 def get_me(current_user: CurrentUserDep):
     return current_user
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+@router.post("/change-password")
+def change_password(body: ChangePasswordRequest, current_user: CurrentUserDep, db: SupabaseDep):
+    try:
+        db.auth.sign_in_with_password({
+            "email": current_user["email"],
+            "password": body.current_password,
+        })
+    except Exception:
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+
+    try:
+        db.auth.admin.update_user_by_id(
+            current_user["id"],
+            {"password": body.new_password},
+        )
+        return {"detail": "Password updated successfully"}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to update password: {exc}")

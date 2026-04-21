@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     twilio_auth_token: str = ""
     twilio_phone_number: str = ""
     twilio_twiml_app_sid: str = ""
+    twilio_api_key_sid: str = ""
+    twilio_api_key_secret: str = ""
     openai_model: str = "gpt-4o-mini"
     frontend_url: str = "http://localhost:3000"
     allowed_origins: str = "http://localhost:3000"
