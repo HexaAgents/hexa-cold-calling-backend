@@ -39,6 +39,7 @@ def process_csv_upload(
     file_content: bytes,
     filename: str,
     user_id: str,
+    batch_id: str,
 ) -> str:
     """Parse CSV, score companies, insert qualifying contacts. Returns batch_id."""
     text = file_content.decode("utf-8-sig")
@@ -47,13 +48,7 @@ def process_csv_upload(
     rows = [_map_row(row, reader.fieldnames or []) for row in reader]
     rows = [r for r in rows if r.get("company_name")]
 
-    batch = import_batch_repo.create_batch(db, {
-        "user_id": user_id,
-        "filename": filename,
-        "total_rows": len(rows),
-        "status": "processing",
-    })
-    batch_id = batch["id"]
+    import_batch_repo.update_batch(db, batch_id, {"total_rows": len(rows)})
 
     websites = list({r["website"] for r in rows if r.get("website")})
     existing_scores = contact_repo.get_existing_scores(db, websites)

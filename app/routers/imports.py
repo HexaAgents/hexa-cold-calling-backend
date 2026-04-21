@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import csv
+import io
+
 from fastapi import APIRouter, HTTPException, UploadFile, BackgroundTasks
 
 from app.dependencies import SupabaseDep, CurrentUserDep, get_supabase
@@ -10,14 +13,25 @@ from app.repositories import import_batch_repo
 router = APIRouter(prefix="/imports", tags=["imports"])
 
 
-def _run_import(file_content: bytes, filename: str, user_id: str) -> None:
+def _run_import(batch_id: str, file_content: bytes, filename: str, user_id: str) -> None:
     """Background task to process the CSV import."""
     db = get_supabase()
     try:
-        import_service.process_csv_upload(db, file_content, filename, user_id)
+        import_service.process_csv_upload(db, file_content, filename, user_id, batch_id)
     except Exception as exc:
         import logging
-        logging.getLogger(__name__).error("Import failed for %s: %s", filename, exc)
+        logger = logging.getLogger(__name__)
+        logger.error("Import failed for %s: %s", filename, exc)
+        try:
+            import_batch_repo.update_batch(db, batch_id, {"status": "failed"})
+        except Exception:
+            logger.error("Failed to mark batch %s as failed", batch_id)
+
+
+def _count_csv_rows(content: bytes) -> int:
+    text = content.decode("utf-8-sig")
+    reader = csv.DictReader(io.StringIO(text))
+    return sum(1 for row in reader if (row.get("Company Name") or "").strip())
 
 
 @router.post("/upload")
@@ -34,9 +48,18 @@ async def upload_csv(
     if not content:
         raise HTTPException(status_code=400, detail="File is empty")
 
-    background_tasks.add_task(_run_import, content, file.filename, current_user["id"])
+    total_rows = _count_csv_rows(content)
 
-    return {"status": "processing", "filename": file.filename}
+    batch = import_batch_repo.create_batch(db, {
+        "user_id": current_user["id"],
+        "filename": file.filename,
+        "total_rows": total_rows,
+        "status": "processing",
+    })
+
+    background_tasks.add_task(_run_import, batch["id"], content, file.filename, current_user["id"])
+
+    return {"batch_id": batch["id"], "total_rows": total_rows, "status": "processing"}
 
 
 @router.get("/{batch_id}/status", response_model=ImportBatchOut)
