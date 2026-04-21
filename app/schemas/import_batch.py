@@ -14,3 +14,4 @@ class ImportBatchOut(BaseModel):
     discarded_rows: int
     status: str
     created_at: datetime | None = None
+    updated_at: datetime | None = None

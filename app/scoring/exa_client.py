@@ -8,6 +8,7 @@ logger = logging.getLogger(__name__)
 
 MAX_TEXT_LENGTH = 8000
 MIN_USEFUL_LENGTH = 100
+EXA_REQUEST_TIMEOUT = 30
 
 
 def fetch_company_info(api_key: str, website: str, company_name: str) -> tuple[str, bool]:
@@ -19,6 +20,7 @@ def fetch_company_info(api_key: str, website: str, company_name: str) -> tuple[s
         return ("", False)
 
     client = Exa(api_key=api_key)
+    _apply_timeout(client, EXA_REQUEST_TIMEOUT)
     text = ""
 
     if website:
@@ -30,6 +32,21 @@ def fetch_company_info(api_key: str, website: str, company_name: str) -> tuple[s
 
     text = text[:MAX_TEXT_LENGTH]
     return (text, len(text) >= MIN_USEFUL_LENGTH)
+
+
+def _apply_timeout(client: Exa, timeout: int) -> None:
+    """Set a default timeout on the Exa client's underlying requests session."""
+    session = getattr(client, "request_session", None) or getattr(client, "_session", None)
+    if session is not None:
+        from requests.adapters import HTTPAdapter
+
+        class _TimeoutAdapter(HTTPAdapter):
+            def send(self, request, **kwargs):
+                kwargs.setdefault("timeout", timeout)
+                return super().send(request, **kwargs)
+
+        session.mount("https://", _TimeoutAdapter())
+        session.mount("http://", _TimeoutAdapter())
 
 
 def _extract_from_url(client: Exa, url: str) -> str:

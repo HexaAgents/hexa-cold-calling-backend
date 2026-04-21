@@ -48,7 +48,7 @@ def score_company(
 
 
 def _call_openai(api_key: str, model: str, messages: list[dict]) -> str | None:
-    client = OpenAI(api_key=api_key)
+    client = OpenAI(api_key=api_key, timeout=30.0)
 
     for attempt in range(2):
         try:
@@ -61,8 +61,8 @@ def _call_openai(api_key: str, model: str, messages: list[dict]) -> str | None:
             return response.choices[0].message.content
         except Exception as exc:
             if attempt == 0:
-                logger.warning("OpenAI call failed (attempt 1), retrying in 5s: %s", exc)
-                time.sleep(5)
+                logger.warning("OpenAI call failed (attempt 1), retrying in 2s: %s", exc)
+                time.sleep(2)
             else:
                 logger.error("OpenAI call failed (attempt 2), giving up: %s", exc)
 

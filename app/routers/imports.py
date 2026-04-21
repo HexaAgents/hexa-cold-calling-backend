@@ -67,6 +67,9 @@ def get_import_status(batch_id: str, current_user: CurrentUserDep, db: SupabaseD
     batch = import_batch_repo.get_batch(db, batch_id)
     if not batch:
         raise HTTPException(status_code=404, detail="Import batch not found")
+    if import_batch_repo.is_stale(batch):
+        import_batch_repo.update_batch(db, batch_id, {"status": "failed"})
+        batch["status"] = "failed"
     return ImportBatchOut(**batch)
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -201,3 +201,161 @@ class TestProcessCsvUpload:
         process_csv_upload(db, csv, "test.csv", "user-1", "batch-1")
 
         _mock_deps["create_contacts_batch"].assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Concurrent scoring tests
+# ---------------------------------------------------------------------------
+
+
+class TestConcurrentScoring:
+    def test_each_unique_website_scored_once(self, _mock_deps):
+        """Three rows sharing two websites: score_website called exactly twice."""
+        from app.services.import_service import process_csv_upload
+
+        _mock_deps["score_website"].return_value = _good_score(80)
+        csv_data = _csv_bytes(
+            "Alpha Inc,https://alpha.com",
+            "Alpha LLC,https://alpha.com",
+            "Beta Corp,https://beta.com",
+        )
+        db = MagicMock()
+
+        process_csv_upload(db, csv_data, "test.csv", "user-1", "batch-1")
+
+        scored_websites = {
+            c.kwargs["website"] for c in _mock_deps["score_website"].call_args_list
+        }
+        assert scored_websites == {"https://alpha.com", "https://beta.com"}
+        assert _mock_deps["score_website"].call_count == 2
+
+    def test_single_failure_does_not_block_others(self, _mock_deps):
+        """One website fails scoring; the other succeeds and is stored."""
+        from app.services.import_service import process_csv_upload
+
+        def _side_effect(**kwargs):
+            if kwargs["website"] == "https://bad.com":
+                raise Exception("Exa timeout")
+            return _good_score(75)
+
+        _mock_deps["score_website"].side_effect = _side_effect
+        csv_data = _csv_bytes(
+            "Good Co,https://good.com",
+            "Bad Co,https://bad.com",
+        )
+        db = MagicMock()
+
+        process_csv_upload(db, csv_data, "test.csv", "user-1", "batch-1")
+
+        _mock_deps["create_contacts_batch"].assert_called()
+        all_contacts = []
+        for c in _mock_deps["create_contacts_batch"].call_args_list:
+            all_contacts.extend(c[0][1])
+
+        good = [c for c in all_contacts if c["company_name"] == "Good Co"]
+        bad = [c for c in all_contacts if c["company_name"] == "Bad Co"]
+        assert len(good) == 1
+        assert good[0]["score"] == 75
+        assert len(bad) == 1
+        assert bad[0]["scoring_failed"] is True
+
+        final_update = _mock_deps["update_batch"].call_args_list[-1]
+        assert final_update[0][2] == {"status": "completed"}
+
+    def test_all_failures_still_completes(self, _mock_deps):
+        """Every score_website call raises; batch still reaches 'completed'."""
+        from app.services.import_service import process_csv_upload
+
+        _mock_deps["score_website"].side_effect = Exception("API down")
+        csv_data = _csv_bytes(
+            "A Corp,https://a.com",
+            "B Corp,https://b.com",
+        )
+        db = MagicMock()
+
+        process_csv_upload(db, csv_data, "test.csv", "user-1", "batch-1")
+
+        all_contacts = []
+        for c in _mock_deps["create_contacts_batch"].call_args_list:
+            all_contacts.extend(c[0][1])
+        assert all(c["scoring_failed"] is True for c in all_contacts)
+
+        final_update = _mock_deps["update_batch"].call_args_list[-1]
+        assert final_update[0][2] == {"status": "completed"}
+
+    def test_progress_updated_during_concurrent_scoring(self, _mock_deps):
+        """With enough unique websites, update_batch is called with estimated progress."""
+        from app.services.import_service import process_csv_upload
+
+        _mock_deps["score_website"].return_value = _good_score(60)
+
+        rows = [f"Company {i},https://site{i}.com" for i in range(10)]
+        csv_data = _csv_bytes(*rows)
+        db = MagicMock()
+
+        process_csv_upload(db, csv_data, "test.csv", "user-1", "batch-1")
+
+        progress_calls = [
+            c for c in _mock_deps["update_batch"].call_args_list
+            if "processed_rows" in c[0][2] and "stored_rows" not in c[0][2]
+        ]
+        assert len(progress_calls) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Total import timeout tests
+# ---------------------------------------------------------------------------
+
+
+class TestImportTimeout:
+    def test_timeout_after_scoring_marks_failed(self, _mock_deps):
+        """If elapsed time exceeds MAX_IMPORT_SECONDS after scoring, batch is failed."""
+        from app.services.import_service import process_csv_upload
+
+        _mock_deps["score_website"].return_value = _good_score(85)
+        csv_data = _csv_bytes("ACME Corp,https://acme.com")
+        db = MagicMock()
+
+        call_count = 0
+
+        def advancing_clock():
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 1:
+                return 0.0
+            return 999.0
+
+        with patch("app.services.import_service.time") as mock_time:
+            mock_time.monotonic = advancing_clock
+            process_csv_upload(db, csv_data, "test.csv", "user-1", "batch-1")
+
+        statuses = [
+            c[0][2]["status"]
+            for c in _mock_deps["update_batch"].call_args_list
+            if "status" in c[0][2]
+        ]
+        assert "failed" in statuses
+
+    def test_timeout_during_row_processing_marks_failed(self, _mock_deps):
+        """If timeout hits mid-batch-loop, batch is marked failed and stops."""
+        from app.services.import_service import process_csv_upload
+
+        _mock_deps["score_website"].return_value = _good_score(70)
+        rows = [f"Company {i},https://site{i}.com" for i in range(30)]
+        csv_data = _csv_bytes(*rows)
+        db = MagicMock()
+
+        # Calls: start_time(0), post-scoring check(0), batch-0 check(0), batch-1 check(999)
+        monotonic_values = iter([0.0, 0.0, 0.0, 999.0, 999.0])
+
+        with patch("app.services.import_service.time") as mock_time:
+            mock_time.monotonic = lambda: next(monotonic_values)
+            process_csv_upload(db, csv_data, "test.csv", "user-1", "batch-1")
+
+        statuses = [
+            c[0][2]["status"]
+            for c in _mock_deps["update_batch"].call_args_list
+            if "status" in c[0][2]
+        ]
+        assert "failed" in statuses
+        assert "completed" not in statuses

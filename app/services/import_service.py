@@ -3,6 +3,8 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from supabase import Client
@@ -32,6 +34,18 @@ COLUMN_MAP: dict[str, str] = {
 }
 
 BATCH_SIZE = 10
+MAX_SCORING_WORKERS = 8
+SCORING_TIMEOUT = 90
+MAX_IMPORT_SECONDS = 600
+
+_FAILED_SCORE: dict[str, object] = {
+    "score": 0,
+    "company_type": "rejected",
+    "rationale": "No website provided",
+    "rejection_reason": "unclear",
+    "exa_scrape_success": False,
+    "scoring_failed": False,
+}
 
 
 def process_csv_upload(
@@ -42,6 +56,7 @@ def process_csv_upload(
     batch_id: str,
 ) -> str:
     """Parse CSV, score companies, insert qualifying contacts. Returns batch_id."""
+    start_time = time.monotonic()
     text = file_content.decode("utf-8-sig")
     reader = csv.DictReader(io.StringIO(text))
 
@@ -53,11 +68,36 @@ def process_csv_upload(
     websites = list({r["website"] for r in rows if r.get("website")})
     existing_scores = contact_repo.get_existing_scores(db, websites)
 
+    websites_to_score: dict[str, dict[str, str]] = {}
+    for row in rows:
+        w = row.get("website", "")
+        if w and w not in existing_scores and w not in websites_to_score:
+            websites_to_score[w] = {
+                "company_name": row.get("company_name", ""),
+                "job_title": row.get("title", ""),
+            }
+
+    if websites_to_score:
+        new_scores = _score_websites_concurrent(
+            websites_to_score, db, batch_id, len(rows),
+        )
+        existing_scores.update(new_scores)
+
+    if _is_timed_out(start_time):
+        logger.error("Import timed out after scoring phase for batch %s", batch_id)
+        import_batch_repo.update_batch(db, batch_id, {"status": "failed"})
+        return batch_id
+
     stored = 0
     discarded = 0
     processed = 0
 
     for i in range(0, len(rows), BATCH_SIZE):
+        if _is_timed_out(start_time):
+            logger.error("Import timed out during row processing for batch %s", batch_id)
+            import_batch_repo.update_batch(db, batch_id, {"status": "failed"})
+            return batch_id
+
         batch_rows = rows[i : i + BATCH_SIZE]
         contacts_to_insert: list[dict] = []
 
@@ -67,38 +107,8 @@ def process_csv_upload(
 
             if website and website in existing_scores:
                 score_data = existing_scores[website]
-            elif website:
-                try:
-                    score_data = score_website(
-                        exa_api_key=settings.exa_api_key,
-                        openai_api_key=settings.openai_api_key,
-                        openai_model=settings.openai_model,
-                        website=website,
-                        company_name=row.get("company_name", ""),
-                        job_title=row.get("title", ""),
-                    )
-                except Exception as exc:
-                    logger.error("Scoring failed for %s: %s", website, exc)
-                    score_data = {
-                        "score": 0,
-                        "company_type": "rejected",
-                        "rationale": f"Scoring error: {str(exc)[:200]}",
-                        "rejection_reason": "unclear",
-                        "exa_scrape_success": False,
-                        "scoring_failed": True,
-                    }
-
-                if website not in existing_scores:
-                    existing_scores[website] = score_data
             else:
-                score_data = {
-                    "score": 0,
-                    "company_type": "rejected",
-                    "rationale": "No website provided",
-                    "rejection_reason": "unclear",
-                    "exa_scrape_success": False,
-                    "scoring_failed": False,
-                }
+                score_data = dict(_FAILED_SCORE)
 
             score_val = score_data.get("score", 0)
             is_failed = score_data.get("scoring_failed", False)
@@ -121,6 +131,67 @@ def process_csv_upload(
 
     import_batch_repo.update_batch(db, batch_id, {"status": "completed"})
     return batch_id
+
+
+def _is_timed_out(start_time: float) -> bool:
+    return (time.monotonic() - start_time) > MAX_IMPORT_SECONDS
+
+
+def _score_websites_concurrent(
+    websites_to_score: dict[str, dict[str, str]],
+    db: Client,
+    batch_id: str,
+    total_rows: int,
+) -> dict[str, dict]:
+    """Score unique websites concurrently using a thread pool."""
+    scores: dict[str, dict] = {}
+    total_to_score = len(websites_to_score)
+    scored_count = 0
+
+    logger.info(
+        "Scoring %d unique websites concurrently (max %d workers)",
+        total_to_score,
+        MAX_SCORING_WORKERS,
+    )
+
+    with ThreadPoolExecutor(max_workers=MAX_SCORING_WORKERS) as executor:
+        futures = {}
+        for website, info in websites_to_score.items():
+            future = executor.submit(
+                score_website,
+                exa_api_key=settings.exa_api_key,
+                openai_api_key=settings.openai_api_key,
+                openai_model=settings.openai_model,
+                website=website,
+                company_name=info["company_name"],
+                job_title=info["job_title"],
+            )
+            futures[future] = website
+
+        for future in as_completed(futures):
+            website = futures[future]
+            try:
+                scores[website] = future.result(timeout=SCORING_TIMEOUT)
+            except Exception as exc:
+                logger.error("Scoring failed for %s: %s", website, exc)
+                scores[website] = {
+                    "score": 0,
+                    "company_type": "rejected",
+                    "rationale": f"Scoring error: {str(exc)[:200]}",
+                    "rejection_reason": "unclear",
+                    "exa_scrape_success": False,
+                    "scoring_failed": True,
+                }
+
+            scored_count += 1
+            if scored_count % 5 == 0 or scored_count == total_to_score:
+                estimated = int(scored_count / total_to_score * total_rows)
+                import_batch_repo.update_batch(
+                    db, batch_id, {"processed_rows": estimated},
+                )
+                logger.info("Scored %d/%d websites", scored_count, total_to_score)
+
+    return scores
 
 
 def _map_row(row: dict[str, Any], fieldnames: list[str]) -> dict[str, Any]:
