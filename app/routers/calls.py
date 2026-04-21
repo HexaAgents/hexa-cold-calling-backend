@@ -40,3 +40,11 @@ def log_call(body: CallLogCreate, current_user: CurrentUserDep, db: SupabaseDep)
 def get_call_history(contact_id: str, current_user: CurrentUserDep, db: SupabaseDep):
     logs = call_log_repo.get_call_logs_for_contact(db, contact_id)
     return [CallLogOut(**log) for log in logs]
+
+
+@router.delete("/{call_id}")
+def delete_call_log(call_id: str, current_user: CurrentUserDep, db: SupabaseDep):
+    result = db.table("call_logs").delete().eq("id", call_id).execute()
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Call log not found")
+    return {"detail": "Call log deleted"}
