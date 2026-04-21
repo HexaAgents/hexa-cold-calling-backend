@@ -34,16 +34,9 @@ async def upload_csv(
     if not content:
         raise HTTPException(status_code=400, detail="File is empty")
 
-    batch = import_batch_repo.create_batch(db, {
-        "user_id": current_user["id"],
-        "filename": file.filename,
-        "total_rows": 0,
-        "status": "processing",
-    })
-
     background_tasks.add_task(_run_import, content, file.filename, current_user["id"])
 
-    return {"batch_id": batch["id"], "status": "processing"}
+    return {"status": "processing", "filename": file.filename}
 
 
 @router.get("/{batch_id}/status", response_model=ImportBatchOut)
