@@ -15,6 +15,7 @@ class LoginRequest(BaseModel):
 
 class LoginResponse(BaseModel):
     access_token: str
+    refresh_token: str
     user: dict
 
 
@@ -32,6 +33,7 @@ def login(body: LoginRequest, db: SupabaseDep):
 
         return LoginResponse(
             access_token=session.access_token,
+            refresh_token=session.refresh_token,
             user={
                 "id": str(user.id),
                 "email": user.email,
@@ -42,6 +44,33 @@ def login(body: LoginRequest, db: SupabaseDep):
         raise
     except Exception as exc:
         raise HTTPException(status_code=401, detail=f"Login failed: {exc}")
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+
+class RefreshResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+
+
+@router.post("/refresh", response_model=RefreshResponse)
+def refresh_token(body: RefreshRequest, db: SupabaseDep):
+    try:
+        result = db.auth.refresh_session(body.refresh_token)
+        session = result.session
+        if not session:
+            raise HTTPException(status_code=401, detail="Invalid refresh token")
+
+        return RefreshResponse(
+            access_token=session.access_token,
+            refresh_token=session.refresh_token,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail=f"Token refresh failed: {exc}")
 
 
 @router.get("/me")
