@@ -17,6 +17,7 @@ class ContactOut(BaseModel):
     city: str | None = None
     state: str | None = None
     country: str | None = None
+    timezone: str | None = None
     email: str | None = None
     mobile_phone: str | None = None
     work_direct_phone: str | None = None

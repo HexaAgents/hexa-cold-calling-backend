@@ -29,11 +29,14 @@ def claim_next_contact(
     cities: list[str] | None = Query(None),
     states: list[str] | None = Query(None),
     countries: list[str] | None = Query(None),
+    business_hours_only: bool = Query(False),
 ):
     """Claim the next available contact, optionally filtered by multiple locations.
 
     Uses Postgres SKIP LOCKED to guarantee no two users get the same contact.
     Contacts with blank/null location always pass through filters.
+    When business_hours_only is true, only contacts whose local time is in
+    8:00-11:59 or 14:00-17:59 are returned (plus contacts with unknown timezone).
     """
     result = db.rpc(
         "claim_next_contact",
@@ -43,6 +46,7 @@ def claim_next_contact(
             "p_cities": cities or None,
             "p_states": states or None,
             "p_countries": countries or None,
+            "p_business_hours_only": business_hours_only,
         },
     ).execute()
     if not result.data:
