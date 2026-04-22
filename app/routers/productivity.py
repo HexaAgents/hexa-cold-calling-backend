@@ -22,13 +22,13 @@ def get_productivity(
 ):
     cutoff = (date.today() - timedelta(days=days)).isoformat()
 
-    users_resp = db.auth.admin.list_users()
+    users_result = db.rpc("get_auth_users").execute()
     user_map: dict[str, str] = {}
     users: list[ProductivityUser] = []
-    for u in users_resp:
-        uid = str(u.id)
-        meta = u.user_metadata or {}
-        full_name = meta.get("full_name", u.email or "Unknown")
+    for u in users_result.data or []:
+        uid = str(u["id"])
+        meta = u.get("raw_user_meta_data") or {}
+        full_name = meta.get("full_name", u.get("email") or "Unknown")
         first_name = full_name.split(" ")[0] if full_name else "Unknown"
         user_map[uid] = first_name
         users.append(ProductivityUser(id=uid, first_name=first_name))
