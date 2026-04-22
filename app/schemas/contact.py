@@ -24,6 +24,7 @@ class ContactOut(BaseModel):
     company_type: str | None = None
     rationale: str | None = None
     rejection_reason: str | None = None
+    company_description: str | None = None
     exa_scrape_success: bool = False
     scoring_failed: bool = False
     call_occasion_count: int = 0
@@ -33,6 +34,8 @@ class ContactOut(BaseModel):
     sms_sent: bool = False
     sms_sent_after_calls: int | None = None
     sms_scheduled_at: datetime | None = None
+    enrichment_status: str | None = None
+    apollo_person_id: str | None = None
     created_at: datetime | None = None
 
 

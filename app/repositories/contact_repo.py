@@ -60,7 +60,7 @@ def get_existing_scores(db: Client, websites: list[str]) -> dict[str, dict]:
         return {}
     result = (
         db.table("contacts")
-        .select("website, score, company_type, rationale, rejection_reason, exa_scrape_success")
+        .select("website, score, company_type, rationale, rejection_reason, exa_scrape_success, company_description")
         .in_("website", websites)
         .not_.is_("score", "null")
         .execute()

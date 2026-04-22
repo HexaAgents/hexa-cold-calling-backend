@@ -44,7 +44,8 @@ Respond ONLY with valid JSON in this exact format, no other text:
   "score": <int 0-100>,
   "company_type": "<manufacturer|distributor|wholesaler|rejected>",
   "rationale": "<1-2 sentence explanation>",
-  "rejection_reason": <null or "service_provider" or "consultancy" or "automation_company" or "unclear">
+  "rejection_reason": <null or "service_provider" or "consultancy" or "automation_company" or "unclear">,
+  "company_description": "<2 sentence summary of what this company does, written as if briefing a sales caller. Focus on their products, industry, and scale. Do not mention Hexa or scoring.>"
 }"""
 
 USER_MESSAGE_TEMPLATE = """\

@@ -96,4 +96,5 @@ def _parse_response(raw: str) -> dict:
         "company_type": company_type,
         "rationale": str(data.get("rationale", "")),
         "rejection_reason": rejection_reason,
+        "company_description": str(data.get("company_description", "")) or None,
     }

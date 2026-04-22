@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     twilio_api_key_sid: str = ""
     twilio_api_key_secret: str = ""
     openai_model: str = "gpt-4o-mini"
+    apollo_api_key: str = ""
+    backend_public_url: str = ""
     frontend_url: str = "http://localhost:3000"
     allowed_origins: str = "http://localhost:3000"
 

@@ -115,6 +115,9 @@ def process_csv_upload(
 
             if score_val > 0 or is_failed:
                 contact = {**row, **score_data, "import_batch_id": batch_id}
+                has_phone = any(row.get(f) for f in ("mobile_phone", "work_direct_phone", "corporate_phone"))
+                if not has_phone:
+                    contact["enrichment_status"] = "pending_enrichment"
                 contacts_to_insert.append(contact)
                 stored += 1
             else:
