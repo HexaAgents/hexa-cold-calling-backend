@@ -148,9 +148,12 @@ class TestEnrichContacts:
     @patch("app.services.apollo_service.contact_repo")
     @patch("app.services.apollo_service.httpx")
     def test_api_failure_marks_contacts_failed(self, mock_httpx, mock_repo, mock_settings, mock_time):
+        import httpx as real_httpx
+
         mock_settings.apollo_api_key = "key-123"
         mock_settings.backend_public_url = "https://backend.example.com"
         mock_time.sleep = MagicMock()
+        mock_httpx.HTTPStatusError = real_httpx.HTTPStatusError
 
         db = MagicMock()
         db.table.return_value.select.return_value \
@@ -208,3 +211,60 @@ class TestEnrichContacts:
 
         call_kwargs = mock_httpx.post.call_args
         assert call_kwargs.kwargs["json"]["webhook_url"] == "https://backend.example.com/apollo/webhook/phone"
+
+    @patch("app.services.apollo_service.time")
+    @patch("app.services.apollo_service.settings")
+    @patch("app.services.apollo_service.contact_repo")
+    @patch("app.services.apollo_service.httpx")
+    def test_429_returns_no_credits_and_leaves_pending(self, mock_httpx, mock_repo, mock_settings, mock_time):
+        """HTTP 429 leaves contacts as pending_enrichment and returns no_credits flag."""
+        import httpx as real_httpx
+
+        mock_settings.apollo_api_key = "key-123"
+        mock_settings.backend_public_url = "https://backend.example.com"
+        mock_time.sleep = MagicMock()
+
+        db = MagicMock()
+        db.table.return_value.select.return_value \
+            .eq.return_value.execute.return_value = _make_execute_result([SAMPLE_CONTACT])
+
+        resp_429 = MagicMock()
+        resp_429.status_code = 429
+        error = real_httpx.HTTPStatusError("rate limited", request=MagicMock(), response=resp_429)
+        mock_httpx.post.return_value.raise_for_status.side_effect = error
+        mock_httpx.HTTPStatusError = real_httpx.HTTPStatusError
+
+        from app.services.apollo_service import enrich_contacts
+        result = enrich_contacts(db, None)
+
+        assert result.get("no_credits") is True
+        mock_repo.update_contact.assert_not_called()
+
+    @patch("app.services.apollo_service.time")
+    @patch("app.services.apollo_service.settings")
+    @patch("app.services.apollo_service.contact_repo")
+    @patch("app.services.apollo_service.httpx")
+    def test_422_marks_contacts_failed(self, mock_httpx, mock_repo, mock_settings, mock_time):
+        """HTTP 422 (bad input) marks contacts as enrichment_failed."""
+        import httpx as real_httpx
+
+        mock_settings.apollo_api_key = "key-123"
+        mock_settings.backend_public_url = "https://backend.example.com"
+        mock_time.sleep = MagicMock()
+
+        db = MagicMock()
+        db.table.return_value.select.return_value \
+            .eq.return_value.execute.return_value = _make_execute_result([SAMPLE_CONTACT])
+
+        resp_422 = MagicMock()
+        resp_422.status_code = 422
+        error = real_httpx.HTTPStatusError("bad input", request=MagicMock(), response=resp_422)
+        mock_httpx.post.return_value.raise_for_status.side_effect = error
+        mock_httpx.HTTPStatusError = real_httpx.HTTPStatusError
+
+        from app.services.apollo_service import enrich_contacts
+        result = enrich_contacts(db, None)
+
+        mock_repo.update_contact.assert_called_once()
+        update_args = mock_repo.update_contact.call_args[0]
+        assert update_args[2]["enrichment_status"] == "enrichment_failed"

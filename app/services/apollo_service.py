@@ -111,8 +111,17 @@ def enrich_contacts(db: Client, contact_ids: list[str] | None = None) -> dict:
                 contact_repo.update_contact(db, contact_id, update)
                 total_sent += 1
 
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 429:
+                logger.warning("Apollo credit/rate limit hit, stopping enrichment")
+                return {"enriched": total_sent, "total": len(contacts), "no_credits": True}
+            logger.error("Apollo HTTP error for batch %d: %s", i, exc)
+            for c in batch:
+                contact_repo.update_contact(
+                    db, c["id"], {"enrichment_status": "enrichment_failed"}
+                )
         except Exception as exc:
-            logger.error("Apollo bulk enrichment failed for batch %d: %s", i, exc)
+            logger.error("Apollo enrichment error for batch %d: %s", i, exc)
             for c in batch:
                 contact_repo.update_contact(
                     db, c["id"], {"enrichment_status": "enrichment_failed"}
@@ -121,4 +130,4 @@ def enrich_contacts(db: Client, contact_ids: list[str] | None = None) -> dict:
         if i + BATCH_SIZE < len(contacts):
             time.sleep(BATCH_DELAY)
 
-    return {"enriched": total_sent, "total": len(contacts)}
+    return {"enriched": total_sent, "total": len(contacts), "no_credits": False}

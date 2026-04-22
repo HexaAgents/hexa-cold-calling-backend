@@ -380,7 +380,10 @@ class TestStreamingScoring:
         csv = _csv_bytes("ACME Corp,https://acme.com")
         db = MagicMock()
 
-        with patch("app.services.apollo_service.enrich_contacts") as mock_enrich:
+        with (
+            patch("app.services.import_service._retry_pending_enrichments", return_value=True),
+            patch("app.services.apollo_service.enrich_contacts", return_value={"enriched": 1, "total": 1, "no_credits": False}) as mock_enrich,
+        ):
             process_csv_upload(db, csv, "test.csv", "user-1", "batch-1")
             mock_enrich.assert_called_once_with(db, ["c-1"])
 
@@ -413,7 +416,10 @@ class TestStreamingScoring:
         csv_data = _csv_bytes(*rows)
         db = MagicMock()
 
-        with patch("app.services.apollo_service.enrich_contacts") as mock_enrich:
+        with (
+            patch("app.services.import_service._retry_pending_enrichments", return_value=True),
+            patch("app.services.apollo_service.enrich_contacts", return_value={"enriched": 1, "total": 1, "no_credits": False}) as mock_enrich,
+        ):
             process_csv_upload(db, csv_data, "test.csv", "user-1", "batch-1")
             assert mock_enrich.call_count == 2
 
@@ -432,7 +438,10 @@ class TestStreamingScoring:
         )
         db = MagicMock()
 
-        with patch("app.services.apollo_service.enrich_contacts") as mock_enrich:
+        with (
+            patch("app.services.import_service._retry_pending_enrichments", return_value=True),
+            patch("app.services.apollo_service.enrich_contacts") as mock_enrich,
+        ):
             process_csv_upload(db, csv, "test.csv", "user-1", "batch-1")
             mock_enrich.assert_not_called()
 

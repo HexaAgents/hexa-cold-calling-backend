@@ -69,6 +69,8 @@ def process_csv_upload(
 
     import_batch_repo.update_batch(db, batch_id, {"total_rows": len(rows)})
 
+    credits_available = _retry_pending_enrichments(db, batch_id)
+
     all_websites = list({r["website"] for r in rows if r.get("website")})
     scored_cache = contact_repo.get_existing_scores(db, all_websites)
 
@@ -118,7 +120,12 @@ def process_csv_upload(
 
         if contacts_to_insert:
             inserted = _safe_insert_batch(db, contacts_to_insert)
-            enriched += _enrich_batch(db, inserted, batch_id)
+            if credits_available:
+                result = _enrich_batch(db, inserted, batch_id)
+                if result < 0:
+                    credits_available = False
+                else:
+                    enriched += result
 
         import_batch_repo.update_batch(db, batch_id, {
             "processed_rows": processed,
@@ -127,7 +134,10 @@ def process_csv_upload(
             "enriched_rows": enriched,
         })
 
-    import_batch_repo.update_batch(db, batch_id, {"status": "completed"})
+    final_update: dict = {"status": "completed"}
+    if not credits_available:
+        final_update["enrichment_error"] = "Apollo credits exhausted"
+    import_batch_repo.update_batch(db, batch_id, final_update)
     return batch_id
 
 
@@ -148,8 +158,37 @@ def _safe_insert_batch(db: Client, contacts: list[dict]) -> list[dict]:
     return inserted
 
 
+def _retry_pending_enrichments(db: Client, batch_id: str) -> bool:
+    """Try to enrich pending contacts from previous imports. Returns False if credits exhausted."""
+    if not settings.apollo_api_key:
+        return True
+    result = (
+        db.table("contacts")
+        .select("id")
+        .eq("enrichment_status", "pending_enrichment")
+        .neq("import_batch_id", batch_id)
+        .execute()
+    )
+    pending_ids = [r["id"] for r in (result.data or [])]
+    if not pending_ids:
+        return True
+    try:
+        from app.services import apollo_service
+        res = apollo_service.enrich_contacts(db, pending_ids)
+        if res.get("no_credits"):
+            logger.warning("Apollo credits exhausted while retrying %d pending contacts", len(pending_ids))
+            return False
+        return True
+    except Exception as exc:
+        logger.error("Retry enrichment failed: %s", exc)
+        return True
+
+
 def _enrich_batch(db: Client, inserted: list[dict], batch_id: str) -> int:
-    """Send enrichment requests for phoneless contacts in this batch."""
+    """Send enrichment requests for phoneless contacts in this batch.
+
+    Returns count of contacts sent for enrichment, or -1 if credits exhausted.
+    """
     enrich_ids = [
         c["id"] for c in inserted
         if c.get("enrichment_status") == "pending_enrichment"
@@ -158,7 +197,9 @@ def _enrich_batch(db: Client, inserted: list[dict], batch_id: str) -> int:
         return 0
     try:
         from app.services import apollo_service
-        apollo_service.enrich_contacts(db, enrich_ids)
+        res = apollo_service.enrich_contacts(db, enrich_ids)
+        if res.get("no_credits"):
+            return -1
         return len(enrich_ids)
     except Exception as exc:
         logger.error("Batch enrichment failed for import %s: %s", batch_id, exc)
