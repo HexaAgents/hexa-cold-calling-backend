@@ -23,14 +23,18 @@ SAMPLE_CONTACT = {
     "company_type": "B2B SaaS",
     "rationale": "Good fit",
     "rejection_reason": None,
+    "company_description": "Manufactures widgets for the automotive industry. Serves OEMs across Europe.",
     "exa_scrape_success": True,
     "scoring_failed": False,
     "call_occasion_count": 2,
+    "times_called": 3,
     "call_outcome": "no_answer",
     "messaging_status": None,
     "sms_sent": False,
     "sms_sent_after_calls": None,
     "sms_scheduled_at": None,
+    "enrichment_status": None,
+    "apollo_person_id": None,
     "created_at": "2025-01-01T00:00:00",
 }
 

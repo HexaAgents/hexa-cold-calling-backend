@@ -11,6 +11,7 @@ def _valid_json(**overrides):
         "company_type": "manufacturer",
         "rationale": "Good fit for cold calling",
         "rejection_reason": None,
+        "company_description": "Manufactures industrial pumps for the oil and gas industry. Serves mid-market clients across North America.",
     }
     data.update(overrides)
     return json.dumps(data)
@@ -62,3 +63,21 @@ class TestParseResponse:
         result = _parse_response(_valid_json(rejection_reason=None))
         assert "rejection_reason" in result
         assert result["rejection_reason"] is None
+
+    def test_parse_company_description(self):
+        result = _parse_response(_valid_json())
+        assert result["company_description"] == "Manufactures industrial pumps for the oil and gas industry. Serves mid-market clients across North America."
+
+    def test_parse_missing_company_description(self):
+        raw = json.dumps({
+            "score": 75,
+            "company_type": "manufacturer",
+            "rationale": "Good fit",
+            "rejection_reason": None,
+        })
+        result = _parse_response(raw)
+        assert result["company_description"] is None
+
+    def test_parse_empty_company_description(self):
+        result = _parse_response(_valid_json(company_description=""))
+        assert result["company_description"] is None

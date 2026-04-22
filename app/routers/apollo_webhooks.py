@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 
 from app.dependencies import get_supabase
 
@@ -12,7 +12,7 @@ router = APIRouter(prefix="/apollo", tags=["apollo"])
 
 
 @router.post("/webhook/phone")
-async def receive_phone_webhook(request: Request):
+async def receive_phone_webhook(request: Request, db=Depends(get_supabase)):
     """Receive async phone number data from Apollo enrichment."""
     try:
         payload = await request.json()
@@ -22,8 +22,6 @@ async def receive_phone_webhook(request: Request):
     people = payload.get("people") or []
     if not people:
         return {"status": "no people in payload"}
-
-    db = get_supabase()
     updated = 0
 
     for person in people:

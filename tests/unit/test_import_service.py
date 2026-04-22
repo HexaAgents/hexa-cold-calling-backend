@@ -172,6 +172,33 @@ class TestProcessCsvUpload:
         contacts = _mock_deps["create_contacts_batch"].call_args[0][1]
         assert contacts[0]["score"] == 90
 
+    def test_process_csv_no_phone_marks_pending_enrichment(self, _mock_deps):
+        from app.services.import_service import process_csv_upload
+
+        _mock_deps["score_website"].return_value = _good_score(85)
+        csv = _csv_bytes("ACME Corp,https://acme.com")
+        db = MagicMock()
+
+        process_csv_upload(db, csv, "test.csv", "user-1", "batch-1")
+
+        contacts = _mock_deps["create_contacts_batch"].call_args[0][1]
+        assert contacts[0]["enrichment_status"] == "pending_enrichment"
+
+    def test_process_csv_with_phone_no_enrichment_status(self, _mock_deps):
+        from app.services.import_service import process_csv_upload
+
+        _mock_deps["score_website"].return_value = _good_score(85)
+        csv = _csv_bytes(
+            "ACME Corp,https://acme.com,+15551234567",
+            headers="Company Name,Website,Mobile Phone",
+        )
+        db = MagicMock()
+
+        process_csv_upload(db, csv, "test.csv", "user-1", "batch-1")
+
+        contacts = _mock_deps["create_contacts_batch"].call_args[0][1]
+        assert "enrichment_status" not in contacts[0]
+
     def test_process_csv_no_website_discarded(self, _mock_deps):
         from app.services.import_service import process_csv_upload
 
