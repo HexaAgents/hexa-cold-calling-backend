@@ -47,6 +47,8 @@ _FAILED_SCORE: dict[str, object] = {
     "scoring_failed": False,
 }
 
+_PHONE_FIELDS = ("mobile_phone", "work_direct_phone", "corporate_phone")
+
 
 def process_csv_upload(
     db: Client,
@@ -55,7 +57,11 @@ def process_csv_upload(
     user_id: str,
     batch_id: str,
 ) -> str:
-    """Parse CSV, score companies, insert qualifying contacts. Returns batch_id."""
+    """Parse CSV, score, insert, and enrich contacts in streaming batches.
+
+    Each batch of BATCH_SIZE rows is scored, inserted, and enriched before
+    moving to the next batch so contacts become callable as fast as possible.
+    """
     start_time = time.monotonic()
     text = file_content.decode("utf-8-sig")
     reader = csv.DictReader(io.StringIO(text))
@@ -65,48 +71,42 @@ def process_csv_upload(
 
     import_batch_repo.update_batch(db, batch_id, {"total_rows": len(rows)})
 
-    websites = list({r["website"] for r in rows if r.get("website")})
-    existing_scores = contact_repo.get_existing_scores(db, websites)
-
-    websites_to_score: dict[str, dict[str, str]] = {}
-    for row in rows:
-        w = row.get("website", "")
-        if w and w not in existing_scores and w not in websites_to_score:
-            websites_to_score[w] = {
-                "company_name": row.get("company_name", ""),
-                "job_title": row.get("title", ""),
-            }
-
-    if websites_to_score:
-        new_scores = _score_websites_concurrent(
-            websites_to_score, db, batch_id, len(rows),
-        )
-        existing_scores.update(new_scores)
-
-    if _is_timed_out(start_time):
-        logger.error("Import timed out after scoring phase for batch %s", batch_id)
-        import_batch_repo.update_batch(db, batch_id, {"status": "failed"})
-        return batch_id
+    all_websites = list({r["website"] for r in rows if r.get("website")})
+    scored_cache = contact_repo.get_existing_scores(db, all_websites)
 
     stored = 0
     discarded = 0
     processed = 0
+    enriched = 0
 
     for i in range(0, len(rows), BATCH_SIZE):
         if _is_timed_out(start_time):
-            logger.error("Import timed out during row processing for batch %s", batch_id)
+            logger.error("Import timed out for batch %s", batch_id)
             import_batch_repo.update_batch(db, batch_id, {"status": "failed"})
             return batch_id
 
         batch_rows = rows[i : i + BATCH_SIZE]
-        contacts_to_insert: list[dict] = []
 
+        to_score: dict[str, dict[str, str]] = {}
+        for row in batch_rows:
+            w = row.get("website", "")
+            if w and w not in scored_cache and w not in to_score:
+                to_score[w] = {
+                    "company_name": row.get("company_name", ""),
+                    "job_title": row.get("title", ""),
+                }
+
+        if to_score:
+            new_scores = _score_batch(to_score)
+            scored_cache.update(new_scores)
+
+        contacts_to_insert: list[dict] = []
         for row in batch_rows:
             processed += 1
             website = row.get("website", "")
 
-            if website and website in existing_scores:
-                score_data = existing_scores[website]
+            if website and website in scored_cache:
+                score_data = scored_cache[website]
             else:
                 score_data = dict(_FAILED_SCORE)
 
@@ -115,7 +115,7 @@ def process_csv_upload(
 
             if score_val > 0 or is_failed:
                 contact = {**row, **score_data, "import_batch_id": batch_id}
-                has_phone = any(row.get(f) for f in ("mobile_phone", "work_direct_phone", "corporate_phone"))
+                has_phone = any(row.get(f) for f in _PHONE_FIELDS)
                 if not has_phone:
                     contact["enrichment_status"] = "pending_enrichment"
                 contacts_to_insert.append(contact)
@@ -124,12 +124,25 @@ def process_csv_upload(
                 discarded += 1
 
         if contacts_to_insert:
-            contact_repo.create_contacts_batch(db, contacts_to_insert)
+            inserted = contact_repo.create_contacts_batch(db, contacts_to_insert)
+
+            enrich_ids = [
+                c["id"] for c in inserted
+                if c.get("enrichment_status") == "pending_enrichment"
+            ]
+            if enrich_ids and settings.apollo_api_key:
+                try:
+                    from app.services import apollo_service
+                    apollo_service.enrich_contacts(db, enrich_ids)
+                    enriched += len(enrich_ids)
+                except Exception as exc:
+                    logger.error("Auto-enrichment failed for batch %s: %s", batch_id, exc)
 
         import_batch_repo.update_batch(db, batch_id, {
             "processed_rows": processed,
             "stored_rows": stored,
             "discarded_rows": discarded,
+            "enriched_rows": enriched,
         })
 
     import_batch_repo.update_batch(db, batch_id, {"status": "completed"})
@@ -140,22 +153,9 @@ def _is_timed_out(start_time: float) -> bool:
     return (time.monotonic() - start_time) > MAX_IMPORT_SECONDS
 
 
-def _score_websites_concurrent(
-    websites_to_score: dict[str, dict[str, str]],
-    db: Client,
-    batch_id: str,
-    total_rows: int,
-) -> dict[str, dict]:
-    """Score unique websites concurrently using a thread pool."""
+def _score_batch(websites_to_score: dict[str, dict[str, str]]) -> dict[str, dict]:
+    """Score a small set of websites concurrently using a thread pool."""
     scores: dict[str, dict] = {}
-    total_to_score = len(websites_to_score)
-    scored_count = 0
-
-    logger.info(
-        "Scoring %d unique websites concurrently (max %d workers)",
-        total_to_score,
-        MAX_SCORING_WORKERS,
-    )
 
     with ThreadPoolExecutor(max_workers=MAX_SCORING_WORKERS) as executor:
         futures = {}
@@ -185,14 +185,6 @@ def _score_websites_concurrent(
                     "exa_scrape_success": False,
                     "scoring_failed": True,
                 }
-
-            scored_count += 1
-            if scored_count % 5 == 0 or scored_count == total_to_score:
-                estimated = int(scored_count / total_to_score * total_rows)
-                import_batch_repo.update_batch(
-                    db, batch_id, {"processed_rows": estimated},
-                )
-                logger.info("Scored %d/%d websites", scored_count, total_to_score)
 
     return scores
 

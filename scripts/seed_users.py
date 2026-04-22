@@ -16,7 +16,7 @@ USERS = [
     {"email": "srijan@hexaagents.com", "password": "Hexa123", "name": "Srijan Tyagi"},
     {"email": "aurideep@hexaagents.com", "password": "Hexa123", "name": "Aurideep Nayak"},
     {"email": "ishaan@hexaagents.com", "password": "Hexa123", "name": "Ishaan Makkar"},
-    {"email": "sanuka@hexaagent.com", "password": "Hexa123", "name": "Sanuka Gunawardena"},
+    {"email": "sanuka@hexaagents.com", "password": "Hexa123", "name": "Sanuka Gunawardena"},
 ]
 
 

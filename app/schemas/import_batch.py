@@ -12,6 +12,7 @@ class ImportBatchOut(BaseModel):
     processed_rows: int
     stored_rows: int
     discarded_rows: int
+    enriched_rows: int = 0
     status: str
     created_at: datetime | None = None
     updated_at: datetime | None = None

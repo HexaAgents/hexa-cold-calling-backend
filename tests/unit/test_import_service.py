@@ -99,12 +99,19 @@ def _mock_deps():
         patch("app.repositories.contact_repo.get_existing_scores", return_value={}) as mock_existing,
         patch("app.repositories.contact_repo.create_contacts_batch") as mock_create,
         patch("app.repositories.import_batch_repo.update_batch") as mock_update,
+        patch("app.services.import_service.settings") as mock_settings,
     ):
+        mock_settings.exa_api_key = "fake"
+        mock_settings.openai_api_key = "fake"
+        mock_settings.openai_model = "gpt-4o-mini"
+        mock_settings.apollo_api_key = ""
+        mock_create.return_value = []
         yield {
             "score_website": mock_score,
             "get_existing_scores": mock_existing,
             "create_contacts_batch": mock_create,
             "update_batch": mock_update,
+            "settings": mock_settings,
         }
 
 
@@ -231,11 +238,11 @@ class TestProcessCsvUpload:
 
 
 # ---------------------------------------------------------------------------
-# Concurrent scoring tests
+# Streaming batch scoring tests
 # ---------------------------------------------------------------------------
 
 
-class TestConcurrentScoring:
+class TestStreamingScoring:
     def test_each_unique_website_scored_once(self, _mock_deps):
         """Three rows sharing two websites: score_website called exactly twice."""
         from app.services.import_service import process_csv_upload
@@ -310,8 +317,8 @@ class TestConcurrentScoring:
         final_update = _mock_deps["update_batch"].call_args_list[-1]
         assert final_update[0][2] == {"status": "completed"}
 
-    def test_progress_updated_during_concurrent_scoring(self, _mock_deps):
-        """With enough unique websites, update_batch is called with estimated progress."""
+    def test_progress_updated_per_batch(self, _mock_deps):
+        """Progress updates include stored_rows and discarded_rows."""
         from app.services.import_service import process_csv_upload
 
         _mock_deps["score_website"].return_value = _good_score(60)
@@ -323,10 +330,59 @@ class TestConcurrentScoring:
         process_csv_upload(db, csv_data, "test.csv", "user-1", "batch-1")
 
         progress_calls = [
-            c for c in _mock_deps["update_batch"].call_args_list
-            if "processed_rows" in c[0][2] and "stored_rows" not in c[0][2]
+            c[0][2] for c in _mock_deps["update_batch"].call_args_list
+            if "stored_rows" in c[0][2]
         ]
         assert len(progress_calls) >= 1
+        assert progress_calls[-1]["stored_rows"] == 10
+
+    def test_score_cache_reused_across_batches(self, _mock_deps):
+        """Website scored in batch 1 is not re-scored in batch 2."""
+        from app.services.import_service import process_csv_upload
+
+        _mock_deps["score_website"].return_value = _good_score(80)
+
+        rows = []
+        for i in range(15):
+            rows.append(f"Company {i},https://shared.com")
+        csv_data = _csv_bytes(*rows)
+        db = MagicMock()
+
+        process_csv_upload(db, csv_data, "test.csv", "user-1", "batch-1")
+
+        assert _mock_deps["score_website"].call_count == 1
+
+    def test_auto_enrichment_triggered_when_apollo_configured(self, _mock_deps):
+        """When apollo_api_key is set and contacts lack phones, enrichment is called."""
+        from app.services.import_service import process_csv_upload
+
+        _mock_deps["settings"].apollo_api_key = "test-key"
+        _mock_deps["score_website"].return_value = _good_score(85)
+        _mock_deps["create_contacts_batch"].return_value = [
+            {"id": "c-1", "enrichment_status": "pending_enrichment"},
+        ]
+        csv = _csv_bytes("ACME Corp,https://acme.com")
+        db = MagicMock()
+
+        with patch("app.services.apollo_service.enrich_contacts") as mock_enrich:
+            process_csv_upload(db, csv, "test.csv", "user-1", "batch-1")
+            mock_enrich.assert_called_once_with(db, ["c-1"])
+
+    def test_no_enrichment_when_apollo_not_configured(self, _mock_deps):
+        """When apollo_api_key is empty, enrichment is skipped."""
+        from app.services.import_service import process_csv_upload
+
+        _mock_deps["settings"].apollo_api_key = ""
+        _mock_deps["score_website"].return_value = _good_score(85)
+        _mock_deps["create_contacts_batch"].return_value = [
+            {"id": "c-1", "enrichment_status": "pending_enrichment"},
+        ]
+        csv = _csv_bytes("ACME Corp,https://acme.com")
+        db = MagicMock()
+
+        with patch("app.services.apollo_service.enrich_contacts") as mock_enrich:
+            process_csv_upload(db, csv, "test.csv", "user-1", "batch-1")
+            mock_enrich.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -335,8 +391,8 @@ class TestConcurrentScoring:
 
 
 class TestImportTimeout:
-    def test_timeout_after_scoring_marks_failed(self, _mock_deps):
-        """If elapsed time exceeds MAX_IMPORT_SECONDS after scoring, batch is failed."""
+    def test_timeout_marks_failed(self, _mock_deps):
+        """If elapsed time exceeds MAX_IMPORT_SECONDS, batch is failed."""
         from app.services.import_service import process_csv_upload
 
         _mock_deps["score_website"].return_value = _good_score(85)
@@ -363,7 +419,7 @@ class TestImportTimeout:
         ]
         assert "failed" in statuses
 
-    def test_timeout_during_row_processing_marks_failed(self, _mock_deps):
+    def test_timeout_during_batch_processing(self, _mock_deps):
         """If timeout hits mid-batch-loop, batch is marked failed and stops."""
         from app.services.import_service import process_csv_upload
 
@@ -372,8 +428,7 @@ class TestImportTimeout:
         csv_data = _csv_bytes(*rows)
         db = MagicMock()
 
-        # Calls: start_time(0), post-scoring check(0), batch-0 check(0), batch-1 check(999)
-        monotonic_values = iter([0.0, 0.0, 0.0, 999.0, 999.0])
+        monotonic_values = iter([0.0, 0.0, 999.0, 999.0, 999.0])
 
         with patch("app.services.import_service.time") as mock_time:
             mock_time.monotonic = lambda: next(monotonic_values)
