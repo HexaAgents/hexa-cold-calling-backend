@@ -10,30 +10,39 @@ def _make_execute_result(data, count=None):
     return result
 
 
-def _make_mock_user(uid, full_name, email="user@example.com"):
-    user = MagicMock()
-    user.id = uid
-    user.email = email
-    user.user_metadata = {"full_name": full_name}
-    return user
+def _user_row(uid, full_name, email="user@example.com"):
+    return {"id": uid, "email": email, "raw_user_meta_data": {"full_name": full_name}}
+
+
+def _setup_users_and_logs(mock_supabase, users, logs):
+    """Configure mock for the RPC users call and the call_logs table query."""
+    rpc_result = _make_execute_result(users)
+    logs_result = _make_execute_result(logs)
+
+    def rpc_side_effect(name, *args, **kwargs):
+        mock = MagicMock()
+        if name == "get_auth_users":
+            mock.execute.return_value = rpc_result
+        return mock
+
+    mock_supabase.rpc.side_effect = rpc_side_effect
+    mock_supabase.table.return_value \
+        .select.return_value \
+        .gte.return_value \
+        .execute.return_value = logs_result
 
 
 class TestProductivity:
     def test_returns_users_and_rows(self, client, mock_supabase):
-        mock_supabase.auth.admin.list_users.return_value = [
-            _make_mock_user("u1", "Alice Johnson"),
-            _make_mock_user("u2", "Bob Smith"),
-        ]
-
-        mock_supabase.table.return_value \
-            .select.return_value \
-            .gte.return_value \
-            .execute.return_value = _make_execute_result([
-                {"user_id": "u1", "call_date": "2026-04-21"},
-                {"user_id": "u1", "call_date": "2026-04-21"},
-                {"user_id": "u2", "call_date": "2026-04-21"},
-                {"user_id": "u1", "call_date": "2026-04-20"},
-            ])
+        _setup_users_and_logs(mock_supabase, [
+            _user_row("u1", "Alice Johnson"),
+            _user_row("u2", "Bob Smith"),
+        ], [
+            {"user_id": "u1", "call_date": "2026-04-21"},
+            {"user_id": "u1", "call_date": "2026-04-21"},
+            {"user_id": "u2", "call_date": "2026-04-21"},
+            {"user_id": "u1", "call_date": "2026-04-20"},
+        ])
 
         resp = client.get("/productivity?days=7")
         assert resp.status_code == 200
@@ -53,13 +62,9 @@ class TestProductivity:
         assert "u2" not in row_20["counts"]
 
     def test_empty_call_logs(self, client, mock_supabase):
-        mock_supabase.auth.admin.list_users.return_value = [
-            _make_mock_user("u1", "Alice Johnson"),
-        ]
-        mock_supabase.table.return_value \
-            .select.return_value \
-            .gte.return_value \
-            .execute.return_value = _make_execute_result([])
+        _setup_users_and_logs(mock_supabase, [
+            _user_row("u1", "Alice Johnson"),
+        ], [])
 
         resp = client.get("/productivity?days=30")
         assert resp.status_code == 200
@@ -69,27 +74,19 @@ class TestProductivity:
         assert body["rows"] == []
 
     def test_default_days_param(self, client, mock_supabase):
-        mock_supabase.auth.admin.list_users.return_value = []
-        mock_supabase.table.return_value \
-            .select.return_value \
-            .gte.return_value \
-            .execute.return_value = _make_execute_result([])
+        _setup_users_and_logs(mock_supabase, [], [])
 
         resp = client.get("/productivity")
         assert resp.status_code == 200
 
     def test_rows_sorted_descending(self, client, mock_supabase):
-        mock_supabase.auth.admin.list_users.return_value = [
-            _make_mock_user("u1", "Alice"),
-        ]
-        mock_supabase.table.return_value \
-            .select.return_value \
-            .gte.return_value \
-            .execute.return_value = _make_execute_result([
-                {"user_id": "u1", "call_date": "2026-04-18"},
-                {"user_id": "u1", "call_date": "2026-04-20"},
-                {"user_id": "u1", "call_date": "2026-04-19"},
-            ])
+        _setup_users_and_logs(mock_supabase, [
+            _user_row("u1", "Alice"),
+        ], [
+            {"user_id": "u1", "call_date": "2026-04-18"},
+            {"user_id": "u1", "call_date": "2026-04-20"},
+            {"user_id": "u1", "call_date": "2026-04-19"},
+        ])
 
         resp = client.get("/productivity?days=7")
         body = resp.json()
@@ -97,15 +94,9 @@ class TestProductivity:
         assert dates == sorted(dates, reverse=True)
 
     def test_user_without_full_name_uses_email(self, client, mock_supabase):
-        user = MagicMock()
-        user.id = "u1"
-        user.email = "alice@example.com"
-        user.user_metadata = {}
-        mock_supabase.auth.admin.list_users.return_value = [user]
-        mock_supabase.table.return_value \
-            .select.return_value \
-            .gte.return_value \
-            .execute.return_value = _make_execute_result([])
+        _setup_users_and_logs(mock_supabase, [
+            {"id": "u1", "email": "alice@example.com", "raw_user_meta_data": {}},
+        ], [])
 
         resp = client.get("/productivity")
         assert resp.status_code == 200
