@@ -77,6 +77,7 @@ SAMPLE_FULL_CONTACT = {
     "company_linkedin_url": None,
     "employees": "50",
     "city": "Berlin",
+    "state": None,
     "country": "DE",
     "email": "jane@acme.com",
     "mobile_phone": "+491234567890",
@@ -122,6 +123,32 @@ class TestClaimNextContact:
         resp = client.post("/calls/next")
         assert resp.status_code == 200
         assert resp.json() is None
+
+    def test_claim_with_location_filters(self, client, mock_supabase):
+        mock_supabase.rpc.return_value \
+            .execute.return_value = _make_execute_result([SAMPLE_FULL_CONTACT])
+
+        resp = client.post("/calls/next?state=California&country=US")
+        assert resp.status_code == 200
+
+        rpc_call = mock_supabase.rpc.call_args
+        params = rpc_call[0][1]
+        assert params["p_state"] == "California"
+        assert params["p_country"] == "US"
+        assert params["p_city"] is None
+
+    def test_claim_with_no_filters_passes_null(self, client, mock_supabase):
+        mock_supabase.rpc.return_value \
+            .execute.return_value = _make_execute_result([SAMPLE_FULL_CONTACT])
+
+        resp = client.post("/calls/next")
+        assert resp.status_code == 200
+
+        rpc_call = mock_supabase.rpc.call_args
+        params = rpc_call[0][1]
+        assert params["p_city"] is None
+        assert params["p_state"] is None
+        assert params["p_country"] is None
 
 
 class TestReleaseContact:

@@ -15,6 +15,7 @@ class ContactOut(BaseModel):
     company_linkedin_url: str | None = None
     employees: str | None = None
     city: str | None = None
+    state: str | None = None
     country: str | None = None
     email: str | None = None
     mobile_phone: str | None = None

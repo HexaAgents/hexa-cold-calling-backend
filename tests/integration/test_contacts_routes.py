@@ -41,6 +41,24 @@ SAMPLE_CONTACT = {
 }
 
 
+class TestGetLocations:
+    def test_returns_distinct_locations(self, client, mock_supabase):
+        mock_supabase.table.return_value \
+            .select.return_value \
+            .not_.return_value \
+            .neq.return_value \
+            .execute.return_value = _make_execute_result([
+                {"city": "Berlin"}, {"city": "Munich"}, {"city": "Berlin"},
+            ])
+
+        resp = client.get("/contacts/locations")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "cities" in body
+        assert "states" in body
+        assert "countries" in body
+
+
 def _make_execute_result(data, count=None):
     result = MagicMock()
     result.data = data

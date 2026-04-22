@@ -35,6 +35,17 @@ def list_contacts(
     )
 
 
+@router.get("/locations")
+def get_locations(current_user: CurrentUserDep, db: SupabaseDep):
+    """Return distinct non-empty location values for filter dropdowns."""
+    locations: dict[str, list[str]] = {"cities": [], "states": [], "countries": []}
+    for field, key in [("city", "cities"), ("state", "states"), ("country", "countries")]:
+        result = db.table("contacts").select(field).not_.is_(field, "null").neq(field, "").execute()
+        values = sorted({row[field] for row in (result.data or []) if row.get(field)})
+        locations[key] = values
+    return locations
+
+
 @router.get("/{contact_id}", response_model=ContactOut)
 def get_contact(contact_id: str, current_user: CurrentUserDep, db: SupabaseDep):
     contact = contact_service.get_contact(db, contact_id)

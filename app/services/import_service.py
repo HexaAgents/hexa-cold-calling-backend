@@ -25,6 +25,7 @@ COLUMN_MAP: dict[str, str] = {
     "Company Linkedin Url": "company_linkedin_url",
     "# Employees": "employees",
     "City": "city",
+    "State": "state",
     "Country": "country",
     "Email": "email",
     "Phone": "mobile_phone",
