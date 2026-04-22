@@ -4,10 +4,13 @@ from fastapi import APIRouter, HTTPException
 
 from app.dependencies import SupabaseDep, CurrentUserDep
 from app.schemas.call import CallLogCreate, CallLogResponse, CallLogOut
+from app.schemas.contact import ContactOut
 from app.services import call_service
 from app.repositories import call_log_repo
 
 router = APIRouter(prefix="/calls", tags=["calls"])
+
+CLAIM_EXPIRE_MINUTES = 30
 
 
 @router.post("/token")
@@ -17,6 +20,45 @@ def get_twilio_token(current_user: CurrentUserDep):
         return {"token": token}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to generate token: {exc}")
+
+
+@router.post("/next", response_model=ContactOut | None)
+def claim_next_contact(current_user: CurrentUserDep, db: SupabaseDep):
+    """Claim the next available contact for the current user.
+
+    Uses Postgres SKIP LOCKED to guarantee no two users get the same contact.
+    """
+    result = db.rpc(
+        "claim_next_contact",
+        {"p_user_id": current_user["id"], "p_expire_minutes": CLAIM_EXPIRE_MINUTES},
+    ).execute()
+    if not result.data:
+        return None
+    return ContactOut(**result.data[0])
+
+
+@router.post("/release/{contact_id}")
+def release_contact(contact_id: str, current_user: CurrentUserDep, db: SupabaseDep):
+    """Release a claimed contact back to the pool."""
+    db.rpc(
+        "release_contact",
+        {"p_contact_id": contact_id, "p_user_id": current_user["id"]},
+    ).execute()
+    return {"detail": "Contact released"}
+
+
+@router.get("/my-queue", response_model=list[ContactOut])
+def get_my_queue(current_user: CurrentUserDep, db: SupabaseDep):
+    """Return all contacts currently claimed by the current user."""
+    result = (
+        db.table("contacts")
+        .select("*")
+        .eq("assigned_to", current_user["id"])
+        .is_("call_outcome", "null")
+        .order("score", desc=True)
+        .execute()
+    )
+    return [ContactOut(**c) for c in (result.data or [])]
 
 
 @router.post("/log", response_model=CallLogResponse)

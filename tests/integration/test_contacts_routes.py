@@ -35,6 +35,8 @@ SAMPLE_CONTACT = {
     "sms_scheduled_at": None,
     "enrichment_status": None,
     "apollo_person_id": None,
+    "assigned_to": None,
+    "assigned_at": None,
     "created_at": "2025-01-01T00:00:00",
 }
 

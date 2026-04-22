@@ -36,6 +36,8 @@ class ContactOut(BaseModel):
     sms_scheduled_at: datetime | None = None
     enrichment_status: str | None = None
     apollo_person_id: str | None = None
+    assigned_to: str | None = None
+    assigned_at: datetime | None = None
     created_at: datetime | None = None
 
 
