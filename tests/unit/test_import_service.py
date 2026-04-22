@@ -294,7 +294,7 @@ class TestStreamingScoring:
         assert bad[0]["scoring_failed"] is True
 
         final_update = _mock_deps["update_batch"].call_args_list[-1]
-        assert final_update[0][2] == {"status": "completed"}
+        assert final_update[0][2]["status"] == "completed"
 
     def test_all_failures_still_completes(self, _mock_deps):
         """Every score_website call raises; batch still reaches 'completed'."""
@@ -315,7 +315,7 @@ class TestStreamingScoring:
         assert all(c["scoring_failed"] is True for c in all_contacts)
 
         final_update = _mock_deps["update_batch"].call_args_list[-1]
-        assert final_update[0][2] == {"status": "completed"}
+        assert final_update[0][2]["status"] == "completed"
 
     def test_progress_updated_per_batch(self, _mock_deps):
         """Progress updates include stored_rows and discarded_rows."""
@@ -384,60 +384,71 @@ class TestStreamingScoring:
             process_csv_upload(db, csv, "test.csv", "user-1", "batch-1")
             mock_enrich.assert_not_called()
 
-
-# ---------------------------------------------------------------------------
-# Total import timeout tests
-# ---------------------------------------------------------------------------
-
-
-class TestImportTimeout:
-    def test_timeout_marks_failed(self, _mock_deps):
-        """If elapsed time exceeds MAX_IMPORT_SECONDS, batch is failed."""
+    def test_enrichment_deferred_until_all_batches_done(self, _mock_deps):
+        """Enrichment runs once after all batches, not per-batch."""
         from app.services.import_service import process_csv_upload
 
+        _mock_deps["settings"].apollo_api_key = "test-key"
         _mock_deps["score_website"].return_value = _good_score(85)
-        csv_data = _csv_bytes("ACME Corp,https://acme.com")
-        db = MagicMock()
-
-        call_count = 0
-
-        def advancing_clock():
-            nonlocal call_count
-            call_count += 1
-            if call_count <= 1:
-                return 0.0
-            return 999.0
-
-        with patch("app.services.import_service.time") as mock_time:
-            mock_time.monotonic = advancing_clock
-            process_csv_upload(db, csv_data, "test.csv", "user-1", "batch-1")
-
-        statuses = [
-            c[0][2]["status"]
-            for c in _mock_deps["update_batch"].call_args_list
-            if "status" in c[0][2]
+        _mock_deps["create_contacts_batch"].return_value = [
+            {"id": "c-1", "enrichment_status": "pending_enrichment"},
         ]
-        assert "failed" in statuses
-
-    def test_timeout_during_batch_processing(self, _mock_deps):
-        """If timeout hits mid-batch-loop, batch is marked failed and stops."""
-        from app.services.import_service import process_csv_upload
-
-        _mock_deps["score_website"].return_value = _good_score(70)
-        rows = [f"Company {i},https://site{i}.com" for i in range(30)]
+        rows = [f"Company {i},https://site{i}.com" for i in range(15)]
         csv_data = _csv_bytes(*rows)
         db = MagicMock()
 
-        monotonic_values = iter([0.0, 0.0, 999.0, 999.0, 999.0])
-
-        with patch("app.services.import_service.time") as mock_time:
-            mock_time.monotonic = lambda: next(monotonic_values)
+        with patch("app.services.apollo_service.enrich_contacts") as mock_enrich:
             process_csv_upload(db, csv_data, "test.csv", "user-1", "batch-1")
+            mock_enrich.assert_called_once()
 
-        statuses = [
-            c[0][2]["status"]
-            for c in _mock_deps["update_batch"].call_args_list
-            if "status" in c[0][2]
+
+# ---------------------------------------------------------------------------
+# Safe batch insert tests
+# ---------------------------------------------------------------------------
+
+
+class TestSafeInsertBatch:
+    def test_batch_insert_fallback_to_individual(self, _mock_deps):
+        """If batch insert fails, rows are retried individually."""
+        from app.services.import_service import _safe_insert_batch
+
+        call_count = 0
+
+        def _insert_side_effect(db, contacts):
+            nonlocal call_count
+            call_count += 1
+            if len(contacts) > 1:
+                raise Exception("batch too large")
+            return [{"id": f"c-{call_count}", **contacts[0]}]
+
+        _mock_deps["create_contacts_batch"].side_effect = _insert_side_effect
+        db = MagicMock()
+        contacts = [
+            {"company_name": "A", "score": 80},
+            {"company_name": "B", "score": 70},
         ]
-        assert "failed" in statuses
-        assert "completed" not in statuses
+
+        result = _safe_insert_batch(db, contacts)
+        assert len(result) == 2
+
+    def test_individual_insert_failure_skips_bad_row(self, _mock_deps):
+        """If even individual insert fails for one row, the rest still succeed."""
+        from app.services.import_service import _safe_insert_batch
+
+        def _insert_side_effect(db, contacts):
+            if len(contacts) > 1:
+                raise Exception("batch fail")
+            if contacts[0]["company_name"] == "Bad":
+                raise Exception("constraint violation")
+            return [{"id": "c-1", **contacts[0]}]
+
+        _mock_deps["create_contacts_batch"].side_effect = _insert_side_effect
+        db = MagicMock()
+        contacts = [
+            {"company_name": "Good", "score": 80},
+            {"company_name": "Bad", "score": 70},
+        ]
+
+        result = _safe_insert_batch(db, contacts)
+        assert len(result) == 1
+        assert result[0]["company_name"] == "Good"

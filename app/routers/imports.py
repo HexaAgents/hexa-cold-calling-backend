@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, BackgroundTasks
 from app.dependencies import SupabaseDep, CurrentUserDep, get_supabase
 from app.schemas.import_batch import ImportBatchOut
 from app.services import import_service
-from app.repositories import import_batch_repo
+from app.repositories import contact_repo, import_batch_repo
 
 router = APIRouter(prefix="/imports", tags=["imports"])
 
@@ -77,3 +77,17 @@ def get_import_status(batch_id: str, current_user: CurrentUserDep, db: SupabaseD
 def get_recent_imports(current_user: CurrentUserDep, db: SupabaseDep):
     batches = import_batch_repo.get_recent_batches(db)
     return [ImportBatchOut(**b) for b in batches]
+
+
+@router.delete("/{batch_id}")
+def delete_import_batch(batch_id: str, current_user: CurrentUserDep, db: SupabaseDep):
+    """Delete a failed/completed batch and all its contacts."""
+    batch = import_batch_repo.get_batch(db, batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Import batch not found")
+    if batch["status"] == "processing":
+        raise HTTPException(status_code=409, detail="Cannot delete a batch that is still processing")
+
+    deleted_count = contact_repo.delete_contacts_by_batch(db, batch_id)
+    import_batch_repo.delete_batch(db, batch_id)
+    return {"deleted_contacts": deleted_count, "batch_id": batch_id}

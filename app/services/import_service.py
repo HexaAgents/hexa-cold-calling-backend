@@ -3,7 +3,6 @@ from __future__ import annotations
 import csv
 import io
 import logging
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
@@ -37,7 +36,6 @@ COLUMN_MAP: dict[str, str] = {
 BATCH_SIZE = 10
 MAX_SCORING_WORKERS = 8
 SCORING_TIMEOUT = 90
-MAX_IMPORT_SECONDS = 600
 
 _FAILED_SCORE: dict[str, object] = {
     "score": 0,
@@ -63,7 +61,6 @@ def process_csv_upload(
     Each batch of BATCH_SIZE rows is scored, inserted, and enriched before
     moving to the next batch so contacts become callable as fast as possible.
     """
-    start_time = time.monotonic()
     text = file_content.decode("utf-8-sig")
     reader = csv.DictReader(io.StringIO(text))
 
@@ -78,14 +75,9 @@ def process_csv_upload(
     stored = 0
     discarded = 0
     processed = 0
-    enriched = 0
+    all_inserted: list[dict] = []
 
     for i in range(0, len(rows), BATCH_SIZE):
-        if _is_timed_out(start_time):
-            logger.error("Import timed out for batch %s", batch_id)
-            import_batch_repo.update_batch(db, batch_id, {"status": "failed"})
-            return batch_id
-
         batch_rows = rows[i : i + BATCH_SIZE]
 
         to_score: dict[str, dict[str, str]] = {}
@@ -125,33 +117,55 @@ def process_csv_upload(
                 discarded += 1
 
         if contacts_to_insert:
-            inserted = contact_repo.create_contacts_batch(db, contacts_to_insert)
-
-            enrich_ids = [
-                c["id"] for c in inserted
-                if c.get("enrichment_status") == "pending_enrichment"
-            ]
-            if enrich_ids and settings.apollo_api_key:
-                try:
-                    from app.services import apollo_service
-                    apollo_service.enrich_contacts(db, enrich_ids)
-                    enriched += len(enrich_ids)
-                except Exception as exc:
-                    logger.error("Auto-enrichment failed for batch %s: %s", batch_id, exc)
+            inserted = _safe_insert_batch(db, contacts_to_insert)
+            all_inserted.extend(inserted)
 
         import_batch_repo.update_batch(db, batch_id, {
             "processed_rows": processed,
             "stored_rows": stored,
             "discarded_rows": discarded,
-            "enriched_rows": enriched,
         })
 
-    import_batch_repo.update_batch(db, batch_id, {"status": "completed"})
+    enriched = _enrich_pending(db, all_inserted, batch_id)
+    import_batch_repo.update_batch(db, batch_id, {
+        "enriched_rows": enriched,
+        "status": "completed",
+    })
     return batch_id
 
 
-def _is_timed_out(start_time: float) -> bool:
-    return (time.monotonic() - start_time) > MAX_IMPORT_SECONDS
+def _safe_insert_batch(db: Client, contacts: list[dict]) -> list[dict]:
+    """Insert a batch of contacts, falling back to one-by-one on failure."""
+    try:
+        return contact_repo.create_contacts_batch(db, contacts)
+    except Exception as exc:
+        logger.warning("Batch insert failed (%d rows), retrying individually: %s", len(contacts), exc)
+
+    inserted: list[dict] = []
+    for contact in contacts:
+        try:
+            result = contact_repo.create_contacts_batch(db, [contact])
+            inserted.extend(result)
+        except Exception as exc:
+            logger.error("Single-row insert failed for %s: %s", contact.get("company_name", "?"), exc)
+    return inserted
+
+
+def _enrich_pending(db: Client, inserted: list[dict], batch_id: str) -> int:
+    """Enrich contacts that need phone numbers, run after all rows are inserted."""
+    enrich_ids = [
+        c["id"] for c in inserted
+        if c.get("enrichment_status") == "pending_enrichment"
+    ]
+    if not enrich_ids or not settings.apollo_api_key:
+        return 0
+    try:
+        from app.services import apollo_service
+        apollo_service.enrich_contacts(db, enrich_ids)
+        return len(enrich_ids)
+    except Exception as exc:
+        logger.error("Auto-enrichment failed for batch %s: %s", batch_id, exc)
+        return 0
 
 
 def _score_batch(websites_to_score: dict[str, dict[str, str]]) -> dict[str, dict]:

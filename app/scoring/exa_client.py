@@ -50,19 +50,15 @@ def _apply_timeout(client: Exa, timeout: int) -> None:
 
 
 def _extract_from_url(client: Exa, url: str) -> str:
-    combined: list[str] = []
-
-    main_text = _get_page(client, url)
-    if main_text:
-        combined.append(main_text)
+    text = _get_page(client, url)
+    if len(text) >= MIN_USEFUL_LENGTH:
+        return text
 
     about_text = _get_page(client, url.rstrip("/") + "/about")
-    if not about_text:
-        about_text = _get_page(client, url.rstrip("/") + "/about-us")
     if about_text:
-        combined.append(about_text)
+        return (text + "\n\n" + about_text).strip() if text else about_text
 
-    return "\n\n".join(combined)
+    return text
 
 
 def _get_page(client: Exa, url: str) -> str:

@@ -54,22 +54,33 @@ def delete_contact(db: Client, contact_id: str) -> bool:
     return bool(result.data)
 
 
+def delete_contacts_by_batch(db: Client, batch_id: str) -> int:
+    result = db.table("contacts").delete().eq("import_batch_id", batch_id).execute()
+    return len(result.data) if result.data else 0
+
+
+_SCORE_FIELDS = "website, score, company_type, rationale, rejection_reason, exa_scrape_success, company_description"
+_SCORE_QUERY_CHUNK = 50
+
+
 def get_existing_scores(db: Client, websites: list[str]) -> dict[str, dict]:
-    """Return a map of website → {score, company_type, rationale, ...} for already-scored websites."""
+    """Return a map of website -> {score, company_type, rationale, ...} for already-scored websites."""
     if not websites:
         return {}
-    result = (
-        db.table("contacts")
-        .select("website, score, company_type, rationale, rejection_reason, exa_scrape_success, company_description")
-        .in_("website", websites)
-        .not_.is_("score", "null")
-        .execute()
-    )
     scores: dict[str, dict] = {}
-    for row in result.data or []:
-        w = row.get("website")
-        if w and w not in scores:
-            scores[w] = row
+    for i in range(0, len(websites), _SCORE_QUERY_CHUNK):
+        chunk = websites[i : i + _SCORE_QUERY_CHUNK]
+        result = (
+            db.table("contacts")
+            .select(_SCORE_FIELDS)
+            .in_("website", chunk)
+            .not_.is_("score", "null")
+            .execute()
+        )
+        for row in result.data or []:
+            w = row.get("website")
+            if w and w not in scores:
+                scores[w] = row
     return scores
 
 

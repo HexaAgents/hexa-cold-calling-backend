@@ -20,6 +20,11 @@ def update_batch(db: Client, batch_id: str, data: dict) -> dict | None:
     return result.data[0] if result.data else None
 
 
+def delete_batch(db: Client, batch_id: str) -> bool:
+    result = db.table("import_batches").delete().eq("id", batch_id).execute()
+    return bool(result.data)
+
+
 def get_batch(db: Client, batch_id: str) -> dict | None:
     result = db.table("import_batches").select("*").eq("id", batch_id).single().execute()
     return result.data
