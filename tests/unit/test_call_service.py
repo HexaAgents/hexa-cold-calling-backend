@@ -15,7 +15,7 @@ def _mock_repos():
         patch("app.repositories.settings_repo.get_settings") as mock_get_settings,
     ):
         mock_create_log.return_value = {"id": "log-1"}
-        mock_get_settings.return_value = {"sms_call_threshold": 3}
+        mock_get_settings.return_value = {"sms_call_threshold": 3, "retry_days": 3}
         yield {
             "has_call_today": mock_has_call,
             "create_call_log": mock_create_log,
@@ -74,7 +74,7 @@ class TestLogCall:
     def test_log_call_sms_prompt_at_threshold(self, _mock_repos):
         _mock_repos["has_call_today"].return_value = False
         _mock_repos["get_contact"].return_value = _contact(occasion_count=2)
-        _mock_repos["get_settings"].return_value = {"sms_call_threshold": 3}
+        _mock_repos["get_settings"].return_value = {"sms_call_threshold": 3, "retry_days": 3}
         db = MagicMock()
 
         result = _call_log_call(db, _mock_repos)
@@ -84,7 +84,7 @@ class TestLogCall:
     def test_log_call_sms_not_triggered_below_threshold(self, _mock_repos):
         _mock_repos["has_call_today"].return_value = False
         _mock_repos["get_contact"].return_value = _contact(occasion_count=1)
-        _mock_repos["get_settings"].return_value = {"sms_call_threshold": 3}
+        _mock_repos["get_settings"].return_value = {"sms_call_threshold": 3, "retry_days": 3}
         db = MagicMock()
 
         result = _call_log_call(db, _mock_repos)
@@ -95,7 +95,7 @@ class TestLogCall:
     def test_log_call_sms_not_triggered_if_already_sent(self, _mock_repos):
         _mock_repos["has_call_today"].return_value = False
         _mock_repos["get_contact"].return_value = _contact(occasion_count=2, sms_sent=True)
-        _mock_repos["get_settings"].return_value = {"sms_call_threshold": 3}
+        _mock_repos["get_settings"].return_value = {"sms_call_threshold": 3, "retry_days": 3}
         db = MagicMock()
 
         result = _call_log_call(db, _mock_repos)
@@ -111,3 +111,31 @@ class TestLogCall:
 
         update_data = _mock_repos["update_contact"].call_args[0][2]
         assert update_data["call_outcome"] == "answered"
+
+    def test_didnt_pick_up_sets_retry_at(self, _mock_repos):
+        """When outcome is didnt_pick_up, retry_at is set N days in the future."""
+        from datetime import date, timedelta
+
+        _mock_repos["has_call_today"].return_value = True
+        _mock_repos["get_contact"].return_value = _contact()
+        _mock_repos["get_settings"].return_value = {"sms_call_threshold": 3, "retry_days": 5}
+        db = MagicMock()
+
+        _call_log_call(db, _mock_repos, outcome="didnt_pick_up")
+
+        update_data = _mock_repos["update_contact"].call_args[0][2]
+        expected = (date.today() + timedelta(days=5)).isoformat()
+        assert update_data["retry_at"] == expected
+        assert update_data["call_outcome"] == "didnt_pick_up"
+
+    def test_interested_clears_retry_at(self, _mock_repos):
+        """Terminal outcomes clear retry_at."""
+        _mock_repos["has_call_today"].return_value = True
+        _mock_repos["get_contact"].return_value = _contact()
+        db = MagicMock()
+
+        _call_log_call(db, _mock_repos, outcome="interested")
+
+        update_data = _mock_repos["update_contact"].call_args[0][2]
+        assert update_data["retry_at"] is None
+        assert update_data["call_outcome"] == "interested"

@@ -26,11 +26,11 @@ def get_twilio_token(current_user: CurrentUserDep):
 def claim_next_contact(
     current_user: CurrentUserDep,
     db: SupabaseDep,
-    city: str | None = Query(None),
-    state: str | None = Query(None),
-    country: str | None = Query(None),
+    cities: list[str] | None = Query(None),
+    states: list[str] | None = Query(None),
+    countries: list[str] | None = Query(None),
 ):
-    """Claim the next available contact for the current user, optionally filtered by location.
+    """Claim the next available contact, optionally filtered by multiple locations.
 
     Uses Postgres SKIP LOCKED to guarantee no two users get the same contact.
     Contacts with blank/null location always pass through filters.
@@ -40,9 +40,9 @@ def claim_next_contact(
         {
             "p_user_id": current_user["id"],
             "p_expire_minutes": CLAIM_EXPIRE_MINUTES,
-            "p_city": city or None,
-            "p_state": state or None,
-            "p_country": country or None,
+            "p_cities": cities or None,
+            "p_states": states or None,
+            "p_countries": countries or None,
         },
     ).execute()
     if not result.data:

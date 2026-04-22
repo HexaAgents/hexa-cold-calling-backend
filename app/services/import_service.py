@@ -75,7 +75,7 @@ def process_csv_upload(
     stored = 0
     discarded = 0
     processed = 0
-    all_inserted: list[dict] = []
+    enriched = 0
 
     for i in range(0, len(rows), BATCH_SIZE):
         batch_rows = rows[i : i + BATCH_SIZE]
@@ -108,8 +108,8 @@ def process_csv_upload(
 
             if score_val > 0 or is_failed:
                 contact = {**row, **score_data, "import_batch_id": batch_id}
-                has_phone = any(row.get(f) for f in _PHONE_FIELDS)
-                if not has_phone:
+                has_mobile = bool(row.get("mobile_phone"))
+                if not has_mobile:
                     contact["enrichment_status"] = "pending_enrichment"
                 contacts_to_insert.append(contact)
                 stored += 1
@@ -118,19 +118,16 @@ def process_csv_upload(
 
         if contacts_to_insert:
             inserted = _safe_insert_batch(db, contacts_to_insert)
-            all_inserted.extend(inserted)
+            enriched += _enrich_batch(db, inserted, batch_id)
 
         import_batch_repo.update_batch(db, batch_id, {
             "processed_rows": processed,
             "stored_rows": stored,
             "discarded_rows": discarded,
+            "enriched_rows": enriched,
         })
 
-    enriched = _enrich_pending(db, all_inserted, batch_id)
-    import_batch_repo.update_batch(db, batch_id, {
-        "enriched_rows": enriched,
-        "status": "completed",
-    })
+    import_batch_repo.update_batch(db, batch_id, {"status": "completed"})
     return batch_id
 
 
@@ -151,8 +148,8 @@ def _safe_insert_batch(db: Client, contacts: list[dict]) -> list[dict]:
     return inserted
 
 
-def _enrich_pending(db: Client, inserted: list[dict], batch_id: str) -> int:
-    """Enrich contacts that need phone numbers, run after all rows are inserted."""
+def _enrich_batch(db: Client, inserted: list[dict], batch_id: str) -> int:
+    """Send enrichment requests for phoneless contacts in this batch."""
     enrich_ids = [
         c["id"] for c in inserted
         if c.get("enrichment_status") == "pending_enrichment"
@@ -164,7 +161,7 @@ def _enrich_pending(db: Client, inserted: list[dict], batch_id: str) -> int:
         apollo_service.enrich_contacts(db, enrich_ids)
         return len(enrich_ids)
     except Exception as exc:
-        logger.error("Auto-enrichment failed for batch %s: %s", batch_id, exc)
+        logger.error("Batch enrichment failed for import %s: %s", batch_id, exc)
         return 0
 
 

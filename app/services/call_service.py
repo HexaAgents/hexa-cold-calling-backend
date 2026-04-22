@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, timedelta
 
 from supabase import Client
 from twilio.rest import Client as TwilioClient
@@ -77,11 +77,18 @@ def log_call(
         occasion_count += 1
         update_data["call_occasion_count"] = occasion_count
 
+    global_settings = settings_repo.get_settings(db)
+
+    if outcome == "didnt_pick_up":
+        retry_days = global_settings.get("retry_days", 3)
+        update_data["retry_at"] = (date.today() + timedelta(days=retry_days)).isoformat()
+    else:
+        update_data["retry_at"] = None
+
     contact_repo.update_contact(db, contact_id, update_data)
 
     sms_prompt_needed = False
     if is_new_occasion and not (contact or {}).get("sms_sent", False):
-        global_settings = settings_repo.get_settings(db)
         threshold = global_settings.get("sms_call_threshold", 3)
         if occasion_count >= threshold:
             sms_prompt_needed = True

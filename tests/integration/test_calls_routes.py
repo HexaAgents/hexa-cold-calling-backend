@@ -128,14 +128,27 @@ class TestClaimNextContact:
         mock_supabase.rpc.return_value \
             .execute.return_value = _make_execute_result([SAMPLE_FULL_CONTACT])
 
-        resp = client.post("/calls/next?state=California&country=US")
+        resp = client.post("/calls/next?states=California&countries=US")
         assert resp.status_code == 200
 
         rpc_call = mock_supabase.rpc.call_args
         params = rpc_call[0][1]
-        assert params["p_state"] == "California"
-        assert params["p_country"] == "US"
-        assert params["p_city"] is None
+        assert params["p_states"] == ["California"]
+        assert params["p_countries"] == ["US"]
+        assert params["p_cities"] is None
+
+    def test_claim_with_multiple_locations(self, client, mock_supabase):
+        mock_supabase.rpc.return_value \
+            .execute.return_value = _make_execute_result([SAMPLE_FULL_CONTACT])
+
+        resp = client.post("/calls/next?states=California&states=New+York&cities=Berlin")
+        assert resp.status_code == 200
+
+        rpc_call = mock_supabase.rpc.call_args
+        params = rpc_call[0][1]
+        assert params["p_states"] == ["California", "New York"]
+        assert params["p_cities"] == ["Berlin"]
+        assert params["p_countries"] is None
 
     def test_claim_with_no_filters_passes_null(self, client, mock_supabase):
         mock_supabase.rpc.return_value \
@@ -146,9 +159,9 @@ class TestClaimNextContact:
 
         rpc_call = mock_supabase.rpc.call_args
         params = rpc_call[0][1]
-        assert params["p_city"] is None
-        assert params["p_state"] is None
-        assert params["p_country"] is None
+        assert params["p_cities"] is None
+        assert params["p_states"] is None
+        assert params["p_countries"] is None
 
 
 class TestReleaseContact:

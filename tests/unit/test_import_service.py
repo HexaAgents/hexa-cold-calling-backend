@@ -191,7 +191,7 @@ class TestProcessCsvUpload:
         contacts = _mock_deps["create_contacts_batch"].call_args[0][1]
         assert contacts[0]["enrichment_status"] == "pending_enrichment"
 
-    def test_process_csv_with_phone_no_enrichment_status(self, _mock_deps):
+    def test_process_csv_with_mobile_skips_enrichment(self, _mock_deps):
         from app.services.import_service import process_csv_upload
 
         _mock_deps["score_website"].return_value = _good_score(85)
@@ -205,6 +205,22 @@ class TestProcessCsvUpload:
 
         contacts = _mock_deps["create_contacts_batch"].call_args[0][1]
         assert "enrichment_status" not in contacts[0]
+
+    def test_process_csv_corporate_phone_only_still_enriches(self, _mock_deps):
+        """A corporate phone does not prove Apollo enrichment; mobile is the signal."""
+        from app.services.import_service import process_csv_upload
+
+        _mock_deps["score_website"].return_value = _good_score(85)
+        csv = _csv_bytes(
+            "ACME Corp,https://acme.com,+15559999999",
+            headers="Company Name,Website,Corporate Phone",
+        )
+        db = MagicMock()
+
+        process_csv_upload(db, csv, "test.csv", "user-1", "batch-1")
+
+        contacts = _mock_deps["create_contacts_batch"].call_args[0][1]
+        assert contacts[0]["enrichment_status"] == "pending_enrichment"
 
     def test_process_csv_no_website_discarded(self, _mock_deps):
         from app.services.import_service import process_csv_upload
@@ -384,8 +400,8 @@ class TestStreamingScoring:
             process_csv_upload(db, csv, "test.csv", "user-1", "batch-1")
             mock_enrich.assert_not_called()
 
-    def test_enrichment_deferred_until_all_batches_done(self, _mock_deps):
-        """Enrichment runs once after all batches, not per-batch."""
+    def test_enrichment_runs_per_batch(self, _mock_deps):
+        """Enrichment runs after each batch insert, not deferred to end."""
         from app.services.import_service import process_csv_upload
 
         _mock_deps["settings"].apollo_api_key = "test-key"
@@ -399,7 +415,26 @@ class TestStreamingScoring:
 
         with patch("app.services.apollo_service.enrich_contacts") as mock_enrich:
             process_csv_upload(db, csv_data, "test.csv", "user-1", "batch-1")
-            mock_enrich.assert_called_once()
+            assert mock_enrich.call_count == 2
+
+    def test_contacts_with_phones_skip_enrichment(self, _mock_deps):
+        """Contacts that already have phone numbers from the CSV are not enriched."""
+        from app.services.import_service import process_csv_upload
+
+        _mock_deps["settings"].apollo_api_key = "test-key"
+        _mock_deps["score_website"].return_value = _good_score(85)
+        _mock_deps["create_contacts_batch"].return_value = [
+            {"id": "c-1"},
+        ]
+        csv = _csv_bytes(
+            "ACME Corp,https://acme.com,+15551234567",
+            headers="Company Name,Website,Mobile Phone",
+        )
+        db = MagicMock()
+
+        with patch("app.services.apollo_service.enrich_contacts") as mock_enrich:
+            process_csv_upload(db, csv, "test.csv", "user-1", "batch-1")
+            mock_enrich.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
