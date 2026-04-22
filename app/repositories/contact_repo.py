@@ -3,7 +3,7 @@ from __future__ import annotations
 from supabase import Client
 
 
-VALID_SORT_COLUMNS = {"created_at", "call_occasion_count", "call_outcome", "score"}
+VALID_SORT_COLUMNS = {"created_at", "call_occasion_count", "times_called", "call_outcome", "score"}
 
 
 def list_contacts(

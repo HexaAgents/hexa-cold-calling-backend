@@ -33,6 +33,7 @@ def log_call(body: CallLogCreate, current_user: CurrentUserDep, db: SupabaseDep)
         call_log=CallLogOut(**result["call_log"]),
         sms_prompt_needed=result["sms_prompt_needed"],
         occasion_count=result["occasion_count"],
+        times_called=result["times_called"],
     )
 
 

@@ -27,6 +27,7 @@ class ContactOut(BaseModel):
     exa_scrape_success: bool = False
     scoring_failed: bool = False
     call_occasion_count: int = 0
+    times_called: int = 0
     call_outcome: str | None = None
     messaging_status: str | None = None
     sms_sent: bool = False

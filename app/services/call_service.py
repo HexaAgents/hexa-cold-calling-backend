@@ -69,8 +69,10 @@ def log_call(
 
     contact = contact_repo.get_contact(db, contact_id)
     occasion_count = contact.get("call_occasion_count", 0) if contact else 0
+    times_called = contact.get("times_called", 0) if contact else 0
 
-    update_data: dict = {"call_outcome": outcome}
+    times_called += 1
+    update_data: dict = {"call_outcome": outcome, "times_called": times_called}
     if is_new_occasion:
         occasion_count += 1
         update_data["call_occasion_count"] = occasion_count
@@ -89,4 +91,5 @@ def log_call(
         "is_new_occasion": is_new_occasion,
         "sms_prompt_needed": sms_prompt_needed,
         "occasion_count": occasion_count,
+        "times_called": times_called,
     }

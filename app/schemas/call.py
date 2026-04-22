@@ -27,3 +27,4 @@ class CallLogResponse(BaseModel):
     call_log: CallLogOut
     sms_prompt_needed: bool = False
     occasion_count: int = 0
+    times_called: int = 0
