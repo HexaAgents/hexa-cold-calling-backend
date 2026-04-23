@@ -355,27 +355,23 @@ def sweep_stuck_enrichments(db: Client, clear_no_credits: bool = False) -> dict:
                 raise
 
     total_reset = stale_count + retry_count + credits_cleared
-    if total_reset:
-        logger.info(
-            "Enrichment sweep reset %d contacts (stale_enriching=%d, retry_failed=%d, credits_cleared=%d)",
-            total_reset,
-            stale_count,
-            retry_count,
-            credits_cleared,
-        )
-        result = enrich_contacts(db, None)
-        return {
-            "stale_enriching_reset": stale_count,
-            "failed_retried": retry_count,
-            "credits_cleared": credits_cleared,
-            "enrichment_result": result,
-        }
-
+    logger.info(
+        "Enrichment sweep reset %d contacts (stale_enriching=%d, retry_failed=%d, credits_cleared=%d)",
+        total_reset,
+        stale_count,
+        retry_count,
+        credits_cleared,
+    )
+    # Always kick off enrich_contacts — it's a no-op if no contacts are in
+    # pending_enrichment. Previously we gated on total_reset>0 which meant
+    # contacts already sitting in pending_enrichment from a prior interrupted
+    # run would never be picked back up by the Retry button.
+    result = enrich_contacts(db, None)
     return {
-        "stale_enriching_reset": 0,
-        "failed_retried": 0,
-        "credits_cleared": 0,
-        "enrichment_result": None,
+        "stale_enriching_reset": stale_count,
+        "failed_retried": retry_count,
+        "credits_cleared": credits_cleared,
+        "enrichment_result": result,
     }
 
 
