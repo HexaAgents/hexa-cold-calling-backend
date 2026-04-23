@@ -193,17 +193,29 @@ def enrich_contacts(db: Client, contact_ids: list[str] | None = None) -> dict:
             except Exception:
                 pass
             now_iso = datetime.now(timezone.utc).isoformat()
-            if exc.response.status_code == 429:
+            # Apollo signals credit exhaustion two ways:
+            #   - 429 (rate limit / hard credit limit)
+            #   - 422 with body containing "insufficient credits" (what we actually see in prod)
+            body_lower = body.lower()
+            out_of_credits = exc.response.status_code == 429 or (
+                exc.response.status_code == 422
+                and ("insufficient credits" in body_lower or "upgrade your plan" in body_lower)
+            )
+            if out_of_credits:
                 logger.warning(
-                    "Apollo credit/rate limit hit (429), stopping enrichment. Body: %s",
+                    "Apollo credits exhausted (status=%d), stopping enrichment. Body: %s",
+                    exc.response.status_code,
                     body,
                 )
-                # Mark already-attempted contacts so the sweep skips them.
+                # Mark already-attempted contacts (and remaining in batch) with
+                # apollo_no_credits so the auto-sweep skips them until the user
+                # tops up and clicks Retry on the import page.
                 for c in batch:
                     _safe_update(
                         db,
                         c["id"],
                         {
+                            "enrichment_status": "enrichment_failed",
                             "last_enrichment_error": ERROR_NO_CREDITS,
                             "enrichment_last_attempt_at": now_iso,
                         },

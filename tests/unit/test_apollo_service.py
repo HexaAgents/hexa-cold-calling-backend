@@ -238,13 +238,12 @@ class TestEnrichContacts:
         result = enrich_contacts(db, None)
 
         assert result.get("no_credits") is True
-        # On 429 the service marks the already-tried batch with
-        # last_enrichment_error='apollo_no_credits' so the auto-sweep can skip
-        # them until the user manually clears via the Retry button. No status
-        # flip, just the error marker + attempt timestamp.
+        # On credit exhaustion (429 or 422 'insufficient credits') the service
+        # marks contacts as enrichment_failed + last_enrichment_error=apollo_no_credits
+        # so the auto-sweep can skip them until the user tops up and clicks Retry.
         for call in mock_repo.update_contact.call_args_list:
             update = call.args[2]
-            assert "enrichment_status" not in update
+            assert update.get("enrichment_status") == "enrichment_failed"
             assert update.get("last_enrichment_error") == "apollo_no_credits"
 
     @patch("app.services.apollo_service.time")
@@ -275,3 +274,48 @@ class TestEnrichContacts:
         mock_repo.update_contact.assert_called_once()
         update_args = mock_repo.update_contact.call_args[0]
         assert update_args[2]["enrichment_status"] == "enrichment_failed"
+
+    @patch("app.services.apollo_service.time")
+    @patch("app.services.apollo_service.settings")
+    @patch("app.services.apollo_service.contact_repo")
+    @patch("app.services.apollo_service.httpx")
+    def test_422_insufficient_credits_is_detected_as_no_credits(
+        self, mock_httpx, mock_repo, mock_settings, mock_time
+    ):
+        """Apollo returns HTTP 422 with body 'insufficient credits' when out of phone credits.
+
+        Must be treated equivalently to 429: stop the batch, return
+        no_credits=True, and mark contacts with last_enrichment_error='apollo_no_credits'.
+        Historically the code only caught 429 so these were silently bucketed as
+        generic enrichment_failed, hiding the real reason from the operator.
+        """
+        import httpx as real_httpx
+
+        mock_settings.apollo_api_key = "key-123"
+        mock_settings.backend_public_url = "https://backend.example.com"
+        mock_time.sleep = MagicMock()
+
+        db = MagicMock()
+        db.table.return_value.select.return_value \
+            .eq.return_value.execute.return_value = _make_execute_result([SAMPLE_CONTACT])
+
+        resp_422 = MagicMock()
+        resp_422.status_code = 422
+        resp_422.text = (
+            "{\"error\":\"You have insufficient credits! "
+            "<a href='https://app.apollo.io/'>Upgrade your plan</a>\"}"
+        )
+        error = real_httpx.HTTPStatusError(
+            "unprocessable entity", request=MagicMock(), response=resp_422
+        )
+        mock_httpx.post.return_value.raise_for_status.side_effect = error
+        mock_httpx.HTTPStatusError = real_httpx.HTTPStatusError
+
+        from app.services.apollo_service import enrich_contacts
+        result = enrich_contacts(db, None)
+
+        assert result.get("no_credits") is True
+        assert mock_repo.update_contact.call_count == 1
+        update = mock_repo.update_contact.call_args.args[2]
+        assert update["enrichment_status"] == "enrichment_failed"
+        assert update["last_enrichment_error"] == "apollo_no_credits"
