@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from enum import Enum
+
+from fastapi import APIRouter, Body, HTTPException, Query
 
 from app.dependencies import SupabaseDep, CurrentUserDep
 from app.schemas.contact import ContactOut, ContactUpdate, ContactListOut
@@ -16,6 +18,7 @@ def list_contacts(
     sort_by: str = Query("created_at"),
     sort_order: str = Query("asc"),
     outcome_filter: str | None = Query(None),
+    search: str | None = Query(None),
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=200),
 ):
@@ -24,6 +27,7 @@ def list_contacts(
         sort_by=sort_by,
         sort_order=sort_order,
         outcome_filter=outcome_filter,
+        search=search,
         page=page,
         per_page=per_page,
     )
@@ -69,6 +73,31 @@ def update_contact(
     if not updated:
         raise HTTPException(status_code=404, detail="Contact not found")
     return ContactOut(**updated)
+
+
+class PhoneType(str, Enum):
+    mobile_phone = "mobile_phone"
+    work_direct_phone = "work_direct_phone"
+    corporate_phone = "corporate_phone"
+
+
+@router.delete("/{contact_id}/phone-number")
+def delete_phone_number(
+    contact_id: str,
+    current_user: CurrentUserDep,
+    db: SupabaseDep,
+    phone_type: PhoneType = Body(embed=True),
+):
+    """Set a specific phone number column to NULL on the contact."""
+    result = (
+        db.table("contacts")
+        .update({phone_type.value: None})
+        .eq("id", contact_id)
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    return {"detail": f"{phone_type.value} removed"}
 
 
 @router.delete("/{contact_id}")

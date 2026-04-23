@@ -220,3 +220,75 @@ class TestCallHistory:
         assert len(body) == 2
         assert body[0]["id"] == "log-1"
         assert body[1]["outcome"] == "voicemail"
+
+    def test_get_call_history_empty(self, client, mock_supabase):
+        mock_supabase.table.return_value \
+            .select.return_value \
+            .eq.return_value \
+            .order.return_value \
+            .execute.return_value = _make_execute_result([])
+
+        resp = client.get("/calls/contact/c-1")
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+
+class TestDeleteCallLog:
+    def test_delete_call_log_success(self, client, mock_supabase):
+        mock_supabase.table.return_value \
+            .delete.return_value \
+            .eq.return_value \
+            .execute.return_value = _make_execute_result([SAMPLE_CALL_LOG])
+
+        resp = client.delete("/calls/log-1")
+        assert resp.status_code == 200
+        assert resp.json()["detail"] == "Call log deleted"
+
+    def test_delete_call_log_not_found(self, client, mock_supabase):
+        mock_supabase.table.return_value \
+            .delete.return_value \
+            .eq.return_value \
+            .execute.return_value = _make_execute_result([])
+
+        resp = client.delete("/calls/nonexistent")
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Call log not found"
+
+
+class TestLogCallBadNumber:
+    @patch("app.services.call_service.settings_repo")
+    @patch("app.services.call_service.contact_repo")
+    @patch("app.services.call_service.call_log_repo")
+    def test_log_call_bad_number_outcome(
+        self, mock_call_log_repo, mock_contact_repo, mock_settings_repo,
+        client, mock_supabase,
+    ):
+        log = {**SAMPLE_CALL_LOG, "outcome": "bad_number"}
+        mock_call_log_repo.has_call_today.return_value = False
+        mock_call_log_repo.create_call_log.return_value = log
+        mock_contact_repo.get_contact.return_value = SAMPLE_CONTACT
+        mock_contact_repo.update_contact.return_value = None
+        mock_settings_repo.get_settings.return_value = SAMPLE_SETTINGS
+
+        resp = client.post("/calls/log", json={
+            "contact_id": "c-1",
+            "call_method": "browser",
+            "phone_number_called": "+491234567890",
+            "outcome": "bad_number",
+        })
+
+        assert resp.status_code == 200
+        assert resp.json()["call_log"]["outcome"] == "bad_number"
+
+
+class TestClaimNextWithBusinessHours:
+    def test_claim_with_business_hours_filter(self, client, mock_supabase):
+        mock_supabase.rpc.return_value \
+            .execute.return_value = _make_execute_result([SAMPLE_FULL_CONTACT])
+
+        resp = client.post("/calls/next?business_hours_only=true")
+        assert resp.status_code == 200
+
+        rpc_call = mock_supabase.rpc.call_args
+        params = rpc_call[0][1]
+        assert params["p_business_hours_only"] is True

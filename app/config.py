@@ -15,8 +15,8 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o-mini"
     apollo_api_key: str = ""
     backend_public_url: str = ""
-    frontend_url: str = "http://localhost:3000"
-    allowed_origins: str = "http://localhost:3000"
+    frontend_url: str = "http://localhost:8080"
+    allowed_origins: str = "http://localhost:8080,http://localhost:3000"
 
     @property
     def cors_origins(self) -> list[str]:

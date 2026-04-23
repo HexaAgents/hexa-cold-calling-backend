@@ -164,3 +164,115 @@ class TestDeleteContact:
         resp = client.delete("/contacts/nonexistent")
         assert resp.status_code == 404
         assert resp.json()["detail"] == "Contact not found"
+
+
+class TestDeletePhoneNumber:
+    def test_delete_mobile_phone(self, client, mock_supabase):
+        mock_supabase.table.return_value \
+            .update.return_value \
+            .eq.return_value \
+            .execute.return_value = _make_execute_result([{**SAMPLE_CONTACT, "mobile_phone": None}])
+
+        resp = client.request(
+            "DELETE", "/contacts/c-1/phone-number",
+            json={"phone_type": "mobile_phone"},
+        )
+        assert resp.status_code == 200
+        assert "mobile_phone" in resp.json()["detail"]
+
+    def test_delete_work_direct_phone(self, client, mock_supabase):
+        mock_supabase.table.return_value \
+            .update.return_value \
+            .eq.return_value \
+            .execute.return_value = _make_execute_result([{**SAMPLE_CONTACT, "work_direct_phone": None}])
+
+        resp = client.request(
+            "DELETE", "/contacts/c-1/phone-number",
+            json={"phone_type": "work_direct_phone"},
+        )
+        assert resp.status_code == 200
+        assert "work_direct_phone" in resp.json()["detail"]
+
+    def test_delete_corporate_phone(self, client, mock_supabase):
+        mock_supabase.table.return_value \
+            .update.return_value \
+            .eq.return_value \
+            .execute.return_value = _make_execute_result([{**SAMPLE_CONTACT, "corporate_phone": None}])
+
+        resp = client.request(
+            "DELETE", "/contacts/c-1/phone-number",
+            json={"phone_type": "corporate_phone"},
+        )
+        assert resp.status_code == 200
+        assert "corporate_phone" in resp.json()["detail"]
+
+    def test_delete_phone_invalid_type(self, client, mock_supabase):
+        resp = client.request(
+            "DELETE", "/contacts/c-1/phone-number",
+            json={"phone_type": "fax_number"},
+        )
+        assert resp.status_code == 422
+
+    def test_delete_phone_contact_not_found(self, client, mock_supabase):
+        mock_supabase.table.return_value \
+            .update.return_value \
+            .eq.return_value \
+            .execute.return_value = _make_execute_result([])
+
+        resp = client.request(
+            "DELETE", "/contacts/nonexistent/phone-number",
+            json={"phone_type": "mobile_phone"},
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Contact not found"
+
+
+class TestListContactsWithSearch:
+    def test_search_by_name(self, client, mock_supabase):
+        mock_supabase.table.return_value \
+            .select.return_value \
+            .or_.return_value \
+            .order.return_value \
+            .range.return_value \
+            .execute.return_value = _make_execute_result([SAMPLE_CONTACT], count=1)
+
+        resp = client.get("/contacts?search=Jane")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total"] == 1
+        assert body["contacts"][0]["first_name"] == "Jane"
+
+    def test_search_by_phone(self, client, mock_supabase):
+        mock_supabase.table.return_value \
+            .select.return_value \
+            .or_.return_value \
+            .order.return_value \
+            .range.return_value \
+            .execute.return_value = _make_execute_result([SAMPLE_CONTACT], count=1)
+
+        resp = client.get("/contacts?search=%2B491234")
+        assert resp.status_code == 200
+        assert resp.json()["total"] == 1
+
+    def test_search_with_outcome_filter(self, client, mock_supabase):
+        mock_supabase.table.return_value \
+            .select.return_value \
+            .eq.return_value \
+            .or_.return_value \
+            .order.return_value \
+            .range.return_value \
+            .execute.return_value = _make_execute_result([], count=0)
+
+        resp = client.get("/contacts?search=ACME&outcome_filter=interested")
+        assert resp.status_code == 200
+        assert resp.json()["total"] == 0
+
+    def test_search_empty_string_ignored(self, client, mock_supabase):
+        mock_supabase.table.return_value \
+            .select.return_value \
+            .order.return_value \
+            .range.return_value \
+            .execute.return_value = _make_execute_result([], count=0)
+
+        resp = client.get("/contacts?search=")
+        assert resp.status_code == 200

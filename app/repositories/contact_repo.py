@@ -11,6 +11,7 @@ def list_contacts(
     sort_by: str = "created_at",
     sort_order: str = "asc",
     outcome_filter: str | None = None,
+    search: str | None = None,
     page: int = 1,
     per_page: int = 50,
 ) -> tuple[list[dict], int]:
@@ -21,6 +22,17 @@ def list_contacts(
 
     if outcome_filter:
         query = query.eq("call_outcome", outcome_filter)
+
+    if search:
+        pattern = f"%{search}%"
+        query = query.or_(
+            f"first_name.ilike.{pattern},"
+            f"last_name.ilike.{pattern},"
+            f"company_name.ilike.{pattern},"
+            f"mobile_phone.ilike.{pattern},"
+            f"work_direct_phone.ilike.{pattern},"
+            f"corporate_phone.ilike.{pattern}"
+        )
 
     desc = sort_order.lower() == "desc"
     query = query.order(sort_by, desc=desc)

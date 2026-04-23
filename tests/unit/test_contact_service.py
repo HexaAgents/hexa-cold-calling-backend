@@ -28,8 +28,28 @@ class TestListContacts:
             sort_by="score",
             sort_order="desc",
             outcome_filter="answered",
+            search=None,
             page=2,
             per_page=25,
+        )
+        assert result == ([{"id": "c1"}], 1)
+
+    def test_list_contacts_with_search(self, _mock_contact_repo):
+        from app.services.contact_service import list_contacts
+
+        _mock_contact_repo.list_contacts.return_value = ([{"id": "c1"}], 1)
+        db = MagicMock()
+
+        result = list_contacts(db, search="Jane")
+
+        _mock_contact_repo.list_contacts.assert_called_once_with(
+            db,
+            sort_by="created_at",
+            sort_order="asc",
+            outcome_filter=None,
+            search="Jane",
+            page=1,
+            per_page=50,
         )
         assert result == ([{"id": "c1"}], 1)
 

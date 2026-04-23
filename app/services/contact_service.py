@@ -10,6 +10,7 @@ def list_contacts(
     sort_by: str = "created_at",
     sort_order: str = "asc",
     outcome_filter: str | None = None,
+    search: str | None = None,
     page: int = 1,
     per_page: int = 50,
 ) -> tuple[list[dict], int]:
@@ -18,6 +19,7 @@ def list_contacts(
         sort_by=sort_by,
         sort_order=sort_order,
         outcome_filter=outcome_filter,
+        search=search,
         page=page,
         per_page=per_page,
     )

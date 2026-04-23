@@ -72,3 +72,73 @@ class TestRecentImports:
         assert len(body) == 2
         assert body[0]["id"] == "batch-1"
         assert body[1]["filename"] == "second.csv"
+
+    def test_get_recent_imports_empty(self, client, mock_supabase):
+        mock_supabase.table.return_value \
+            .select.return_value \
+            .order.return_value \
+            .limit.return_value \
+            .execute.return_value = _make_execute_result([])
+
+        resp = client.get("/imports/recent")
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+
+COMPLETED_BATCH = {**SAMPLE_BATCH, "status": "completed"}
+FAILED_BATCH = {**SAMPLE_BATCH, "status": "failed"}
+
+
+class TestDeleteImportBatch:
+    def test_delete_completed_batch(self, client, mock_supabase):
+        mock_supabase.table.return_value \
+            .select.return_value \
+            .eq.return_value \
+            .single.return_value \
+            .execute.return_value = _make_execute_result(COMPLETED_BATCH)
+        mock_supabase.table.return_value \
+            .delete.return_value \
+            .eq.return_value \
+            .execute.return_value = _make_execute_result([{"id": "c-1"}])
+
+        resp = client.delete("/imports/batch-1")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["batch_id"] == "batch-1"
+        assert "deleted_contacts" in body
+
+    def test_delete_failed_batch(self, client, mock_supabase):
+        mock_supabase.table.return_value \
+            .select.return_value \
+            .eq.return_value \
+            .single.return_value \
+            .execute.return_value = _make_execute_result(FAILED_BATCH)
+        mock_supabase.table.return_value \
+            .delete.return_value \
+            .eq.return_value \
+            .execute.return_value = _make_execute_result([])
+
+        resp = client.delete("/imports/batch-1")
+        assert resp.status_code == 200
+
+    def test_delete_processing_batch_rejected(self, client, mock_supabase):
+        mock_supabase.table.return_value \
+            .select.return_value \
+            .eq.return_value \
+            .single.return_value \
+            .execute.return_value = _make_execute_result(SAMPLE_BATCH)
+
+        resp = client.delete("/imports/batch-1")
+        assert resp.status_code == 409
+        assert "still processing" in resp.json()["detail"]
+
+    def test_delete_batch_not_found(self, client, mock_supabase):
+        mock_supabase.table.return_value \
+            .select.return_value \
+            .eq.return_value \
+            .single.return_value \
+            .execute.return_value = _make_execute_result(None)
+
+        resp = client.delete("/imports/nonexistent")
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Import batch not found"
