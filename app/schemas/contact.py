@@ -40,6 +40,7 @@ class ContactOut(BaseModel):
     apollo_person_id: str | None = None
     assigned_to: str | None = None
     assigned_at: datetime | None = None
+    retry_at: datetime | None = None
     created_at: datetime | None = None
 
 

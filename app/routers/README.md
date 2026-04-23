@@ -291,9 +291,9 @@ Manages the call lifecycle: generating browser-call tokens, logging call outcome
 
 | Schema | Source | Purpose |
 |---|---|---|
-| `CallLogCreate` | `app.schemas.call` | Input: `contact_id`, `call_method`, `phone_number_called` (optional), `outcome`. |
+| `CallLogCreate` | `app.schemas.call` | Input: `contact_id`, `call_method`, `phone_number_called` (optional), `outcome`, `callback_date` (optional). |
 | `CallLogOut` | `app.schemas.call` | Full call log row: `id`, `contact_id`, `user_id`, `call_date`, `call_method`, `phone_number_called`, `outcome`, `is_new_occasion`, `created_at`. |
-| `CallLogResponse` | `app.schemas.call` | Composite response: `{ call_log: CallLogOut, sms_prompt_needed: bool, occasion_count: int }`. |
+| `CallLogResponse` | `app.schemas.call` | Composite response: `{ call_log: CallLogOut, sms_prompt_needed: bool, occasion_count: int, times_called: int, retry_at: str | None }`. |
 
 #### Endpoints
 
@@ -325,10 +325,10 @@ def log_call(body: CallLogCreate, current_user: CurrentUserDep, db: SupabaseDep)
 
 | Aspect | Detail |
 |---|---|
-| **Parameters** | JSON body: `contact_id` (str), `call_method` (str, e.g. `"browser"` or `"manual"`), `phone_number_called` (optional str), `outcome` (str, e.g. `"no_answer"`, `"interested"`). |
+| **Parameters** | JSON body: `contact_id` (str), `call_method` (str, e.g. `"browser"` or `"manual"`), `phone_number_called` (optional str), `outcome` (str, e.g. `"no_answer"`, `"interested"`), `callback_date` (optional str, ISO date for per-contact callback override). |
 | **Auth required** | Yes. |
-| **Service called** | `call_service.log_call(db, contact_id, user_id, call_method, phone_number_called, outcome)` — returns a dict with keys `call_log`, `sms_prompt_needed`, `occasion_count`. |
-| **Returns** | `CallLogResponse` — contains the persisted `CallLogOut` plus SMS-threshold metadata. |
+| **Service called** | `call_service.log_call(db, contact_id, user_id, call_method, phone_number_called, outcome, callback_date)` — returns a dict with keys `call_log`, `sms_prompt_needed`, `occasion_count`, `times_called`, `retry_at`. |
+| **Returns** | `CallLogResponse` — contains the persisted `CallLogOut`, SMS-threshold metadata, and the confirmed `retry_at` callback date. |
 | **Error handling** | Implicit — relies on service-layer exceptions propagating as 500s. |
 
 Line-by-line:
@@ -553,8 +553,8 @@ Manages the single-row `app_settings` table. The two configurable values control
 
 | Schema | Source | Purpose |
 |---|---|---|
-| `SettingsOut` | `app.schemas.settings` | Output: `id`, `sms_call_threshold: int`, `sms_template: str`. |
-| `SettingsUpdate` | `app.schemas.settings` | Input: both fields optional — `sms_call_threshold: int | None`, `sms_template: str | None`. |
+| `SettingsOut` | `app.schemas.settings` | Output: `id`, `sms_call_threshold: int`, `sms_template: str`, `retry_days: int`. |
+| `SettingsUpdate` | `app.schemas.settings` | Input: all fields optional — `sms_call_threshold: int | None`, `sms_template: str | None`, `retry_days: int | None`. |
 
 #### Endpoints
 
@@ -620,7 +620,7 @@ HTTP Request
 | `auth.py` | `/auth` | `POST /login`, `GET /me` | Supabase Auth directly |
 | `contacts.py` | `/contacts` | `GET /`, `GET /{id}`, `PATCH /{id}`, `DELETE /{id}` | `contact_service` |
 | `imports.py` | `/imports` | `POST /upload`, `GET /{id}/status`, `GET /recent` | `import_service`, `import_batch_repo` |
-| `calls.py` | `/calls` | `POST /token`, `POST /log`, `GET /contact/{id}` | `call_service`, `call_log_repo` |
+| `calls.py` | `/calls` | `POST /token`, `POST /next`, `POST /release/{id}`, `GET /my-queue`, `POST /log`, `GET /contact/{id}`, `DELETE /{id}` | `call_service`, `call_log_repo` |
 | `twilio_webhooks.py` | `/twilio` | `POST /voice`, `POST /status` | Inline TwiML generation |
 | `sms.py` | `/sms` | `POST /send`, `POST /schedule` | `sms_service` |
 | `notes.py` | *(none)* | `GET /contacts/{id}/notes`, `POST /contacts/{id}/notes`, `PATCH /notes/{id}`, `DELETE /notes/{id}` | `note_repo` |

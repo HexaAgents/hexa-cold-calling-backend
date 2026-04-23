@@ -448,9 +448,9 @@ return call.sid
 
 Returns the Twilio Call SID, a unique identifier the frontend can use to track or hang up the call.
 
-### `log_call(db, contact_id, user_id, call_method, phone_number_called, outcome) → dict`
+### `log_call(db, contact_id, user_id, call_method, phone_number_called, outcome, callback_date) → dict`
 
-**Purpose:** This is the most complex function in the calling domain. It records a call log, detects whether this is a new "occasion" (first call to this contact today), increments the occasion counter, and checks whether the SMS threshold has been reached.
+**Purpose:** This is the most complex function in the calling domain. It records a call log, detects whether this is a new "occasion" (first call to this contact today), increments the occasion counter, checks whether the SMS threshold has been reached, and manages the retry/callback schedule for "didn't pick up" outcomes.
 
 **Parameters:**
 
@@ -461,9 +461,10 @@ Returns the Twilio Call SID, a unique identifier the frontend can use to track o
 | `user_id` | `str` | UUID of the user who made the call |
 | `call_method` | `str` | How the call was made (e.g. `"browser"`, `"bridge"`, `"manual"`) |
 | `phone_number_called` | `str \| None` | The actual phone number dialed, or None if unknown |
-| `outcome` | `str` | Call outcome (e.g. `"no_answer"`, `"voicemail"`, `"spoke"`) |
+| `outcome` | `str` | Call outcome (e.g. `"didnt_pick_up"`, `"not_interested"`, `"interested"`) |
+| `callback_date` | `str \| None` | Optional ISO date string for a per-contact callback override. When provided and outcome is `"didnt_pick_up"`, this date is used as `retry_at` instead of computing from `settings.retry_days`. Defaults to `None`. |
 
-**Returns:** A dict with four keys: `call_log`, `is_new_occasion`, `sms_prompt_needed`, `occasion_count`.
+**Returns:** A dict with six keys: `call_log`, `is_new_occasion`, `sms_prompt_needed`, `occasion_count`, `times_called`, `retry_at`.
 
 **Line-by-line walkthrough:**
 
@@ -534,10 +535,12 @@ return {
     "is_new_occasion": is_new_occasion,
     "sms_prompt_needed": sms_prompt_needed,
     "occasion_count": occasion_count,
+    "times_called": times_called,
+    "retry_at": retry_at_value,
 }
 ```
 
-Returns all four pieces of information the router needs: the created call log record, whether a new occasion was counted, whether the frontend should prompt for SMS, and the current occasion count.
+Returns all six pieces of information the router needs: the created call log record, whether a new occasion was counted, whether the frontend should prompt for SMS, the current occasion count, total times called, and the confirmed callback date (or `None` for non-retry outcomes).
 
 ---
 

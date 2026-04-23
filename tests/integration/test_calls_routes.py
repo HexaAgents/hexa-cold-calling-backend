@@ -101,6 +101,7 @@ SAMPLE_FULL_CONTACT = {
     "apollo_person_id": None,
     "assigned_to": None,
     "assigned_at": None,
+    "retry_at": None,
     "created_at": "2025-01-01T00:00:00",
 }
 
@@ -292,3 +293,55 @@ class TestClaimNextWithBusinessHours:
         rpc_call = mock_supabase.rpc.call_args
         params = rpc_call[0][1]
         assert params["p_business_hours_only"] is True
+
+
+class TestLogCallWithCallbackDate:
+    @patch("app.services.call_service.settings_repo")
+    @patch("app.services.call_service.contact_repo")
+    @patch("app.services.call_service.call_log_repo")
+    def test_log_call_with_callback_date(
+        self, mock_call_log_repo, mock_contact_repo, mock_settings_repo,
+        client, mock_supabase,
+    ):
+        log = {**SAMPLE_CALL_LOG, "outcome": "didnt_pick_up"}
+        mock_call_log_repo.has_call_today.return_value = False
+        mock_call_log_repo.create_call_log.return_value = log
+        mock_contact_repo.get_contact.return_value = SAMPLE_CONTACT
+        mock_contact_repo.update_contact.return_value = None
+        mock_settings_repo.get_settings.return_value = SAMPLE_SETTINGS
+
+        resp = client.post("/calls/log", json={
+            "contact_id": "c-1",
+            "call_method": "browser",
+            "phone_number_called": "+491234567890",
+            "outcome": "didnt_pick_up",
+            "callback_date": "2026-06-15",
+        })
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["retry_at"] == "2026-06-15"
+
+    @patch("app.services.call_service.settings_repo")
+    @patch("app.services.call_service.contact_repo")
+    @patch("app.services.call_service.call_log_repo")
+    def test_log_call_without_callback_date(
+        self, mock_call_log_repo, mock_contact_repo, mock_settings_repo,
+        client, mock_supabase,
+    ):
+        mock_call_log_repo.has_call_today.return_value = False
+        mock_call_log_repo.create_call_log.return_value = SAMPLE_CALL_LOG
+        mock_contact_repo.get_contact.return_value = SAMPLE_CONTACT
+        mock_contact_repo.update_contact.return_value = None
+        mock_settings_repo.get_settings.return_value = SAMPLE_SETTINGS
+
+        resp = client.post("/calls/log", json={
+            "contact_id": "c-1",
+            "call_method": "browser",
+            "phone_number_called": "+491234567890",
+            "outcome": "no_answer",
+        })
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["retry_at"] is None

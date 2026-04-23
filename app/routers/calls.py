@@ -87,12 +87,14 @@ def log_call(body: CallLogCreate, current_user: CurrentUserDep, db: SupabaseDep)
         call_method=body.call_method,
         phone_number_called=body.phone_number_called,
         outcome=body.outcome,
+        callback_date=body.callback_date,
     )
     return CallLogResponse(
         call_log=CallLogOut(**result["call_log"]),
         sms_prompt_needed=result["sms_prompt_needed"],
         occasion_count=result["occasion_count"],
         times_called=result["times_called"],
+        retry_at=result["retry_at"],
     )
 
 

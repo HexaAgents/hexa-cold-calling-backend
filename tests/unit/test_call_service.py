@@ -33,7 +33,7 @@ def _contact(occasion_count=0, sms_sent=False):
     }
 
 
-def _call_log_call(db, mocks, outcome="no_answer"):
+def _call_log_call(db, mocks, outcome="no_answer", callback_date=None):
     from app.services.call_service import log_call
 
     return log_call(
@@ -43,6 +43,7 @@ def _call_log_call(db, mocks, outcome="no_answer"):
         call_method="browser",
         phone_number_called="+1234567890",
         outcome=outcome,
+        callback_date=callback_date,
     )
 
 
@@ -121,12 +122,13 @@ class TestLogCall:
         _mock_repos["get_settings"].return_value = {"sms_call_threshold": 3, "retry_days": 5}
         db = MagicMock()
 
-        _call_log_call(db, _mock_repos, outcome="didnt_pick_up")
+        result = _call_log_call(db, _mock_repos, outcome="didnt_pick_up")
 
         update_data = _mock_repos["update_contact"].call_args[0][2]
         expected = (date.today() + timedelta(days=5)).isoformat()
         assert update_data["retry_at"] == expected
         assert update_data["call_outcome"] == "didnt_pick_up"
+        assert result["retry_at"] == expected
 
     def test_interested_clears_retry_at(self, _mock_repos):
         """Terminal outcomes clear retry_at."""
@@ -134,8 +136,56 @@ class TestLogCall:
         _mock_repos["get_contact"].return_value = _contact()
         db = MagicMock()
 
-        _call_log_call(db, _mock_repos, outcome="interested")
+        result = _call_log_call(db, _mock_repos, outcome="interested")
 
         update_data = _mock_repos["update_contact"].call_args[0][2]
         assert update_data["retry_at"] is None
         assert update_data["call_outcome"] == "interested"
+        assert result["retry_at"] is None
+
+    def test_didnt_pick_up_with_custom_callback_date(self, _mock_repos):
+        """Custom callback_date overrides global retry_days."""
+        _mock_repos["has_call_today"].return_value = True
+        _mock_repos["get_contact"].return_value = _contact()
+        _mock_repos["get_settings"].return_value = {"sms_call_threshold": 3, "retry_days": 3}
+        db = MagicMock()
+
+        result = _call_log_call(
+            db, _mock_repos, outcome="didnt_pick_up", callback_date="2026-05-15",
+        )
+
+        update_data = _mock_repos["update_contact"].call_args[0][2]
+        assert update_data["retry_at"] == "2026-05-15"
+        assert result["retry_at"] == "2026-05-15"
+
+    def test_didnt_pick_up_without_callback_date_uses_global(self, _mock_repos):
+        """When no callback_date is given, global retry_days is used."""
+        from datetime import date, timedelta
+
+        _mock_repos["has_call_today"].return_value = True
+        _mock_repos["get_contact"].return_value = _contact()
+        _mock_repos["get_settings"].return_value = {"sms_call_threshold": 3, "retry_days": 7}
+        db = MagicMock()
+
+        result = _call_log_call(
+            db, _mock_repos, outcome="didnt_pick_up", callback_date=None,
+        )
+
+        update_data = _mock_repos["update_contact"].call_args[0][2]
+        expected = (date.today() + timedelta(days=7)).isoformat()
+        assert update_data["retry_at"] == expected
+        assert result["retry_at"] == expected
+
+    def test_non_didnt_pick_up_ignores_callback_date(self, _mock_repos):
+        """Passing callback_date with a non-didnt_pick_up outcome still clears retry_at."""
+        _mock_repos["has_call_today"].return_value = True
+        _mock_repos["get_contact"].return_value = _contact()
+        db = MagicMock()
+
+        result = _call_log_call(
+            db, _mock_repos, outcome="interested", callback_date="2026-06-01",
+        )
+
+        update_data = _mock_repos["update_contact"].call_args[0][2]
+        assert update_data["retry_at"] is None
+        assert result["retry_at"] is None

@@ -9,6 +9,7 @@ class CallLogCreate(BaseModel):
     call_method: str
     phone_number_called: str | None = None
     outcome: str
+    callback_date: str | None = None
 
 
 class CallLogOut(BaseModel):
@@ -28,3 +29,4 @@ class CallLogResponse(BaseModel):
     sms_prompt_needed: bool = False
     occasion_count: int = 0
     times_called: int = 0
+    retry_at: str | None = None

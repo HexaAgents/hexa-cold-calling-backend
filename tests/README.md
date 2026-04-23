@@ -4,12 +4,29 @@
 
 ```
 tests/
-├── conftest.py                  # Shared pytest fixtures used by every test
+├── conftest.py                           # Shared pytest fixtures used by every test
 ├── unit/
-│   ├── test_scoring_service.py  # Tests for the AI scoring pipeline
-│   └── test_sms_service.py      # Tests for SMS template rendering
+│   ├── test_call_service.py              # Call logging, retry/callback, SMS threshold
+│   ├── test_contact_service.py           # Contact CRUD delegation
+│   ├── test_import_service.py            # CSV parsing, scoring, batch insert
+│   ├── test_scoring_service.py           # AI scoring pipeline (Exa + OpenAI)
+│   ├── test_sms_service.py              # SMS template rendering
+│   ├── test_openai_scorer.py            # OpenAI response parsing
+│   ├── test_apollo_service.py           # Apollo enrichment helpers
+│   ├── test_apollo_webhook.py           # Apollo webhook payload handling
+│   └── test_stale_recovery.py           # Stale import detection/recovery
 └── integration/
-    └── test_health.py           # HTTP-level test against the FastAPI app
+    ├── test_health.py                    # Health check endpoint
+    ├── test_auth_routes.py               # Auth/me endpoints
+    ├── test_contacts_routes.py           # Contact CRUD + search + phone delete
+    ├── test_calls_routes.py              # Call logging, claim, release, queue, callback_date
+    ├── test_settings_routes.py           # Settings GET/PUT including retry_days
+    ├── test_imports_routes.py            # CSV upload, batch status, recent imports
+    ├── test_twilio_routes.py             # Voice TwiML + status webhook
+    ├── test_sms_routes.py               # Send/schedule SMS
+    ├── test_notes_routes.py             # Notes CRUD
+    ├── test_apollo_routes.py            # Apollo enrichment + webhook
+    └── test_productivity_routes.py      # Productivity aggregation
 ```
 
 Unit tests validate individual functions in complete isolation — every external dependency (Exa, OpenAI, Supabase) is replaced with a mock. Integration tests spin up a real FastAPI `TestClient` and make actual HTTP requests against the app, but still mock the database and authentication layers so no real credentials are needed.

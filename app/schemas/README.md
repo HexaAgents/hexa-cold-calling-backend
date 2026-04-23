@@ -20,6 +20,7 @@ The full read model for a contact, returned by `GET /contacts` and `GET /contact
 - **`scoring_failed: bool = False`**: True when scoring errored after retry — these rows are kept for manual review.
 - **`call_occasion_count: int = 0`**: Number of separate days the contact has been called.
 - **`messaging_status: str | None`**: Either `"to_be_messaged"` (SMS scheduled) or `"message_sent"`.
+- **`retry_at: datetime | None`**: When this contact should re-enter the caller's queue. Set by `log_call` when outcome is `didnt_pick_up` (either a custom callback date or computed from `settings.retry_days`). Cleared on other outcomes.
 - **`created_at: datetime | None`**: Set by the database `DEFAULT NOW()`, used for sort-by-import-order.
 
 ### `ContactUpdate`
@@ -60,6 +61,7 @@ Request body for `POST /calls/log`:
 - **`call_method: str`**: Either `"browser"` (WebRTC via Twilio Client) or `"bridge"` (Twilio calls user's phone first).
 - **`phone_number_called: str | None`**: Which of the contact's numbers was dialed. Optional because the call might not connect.
 - **`outcome: str`**: Required — one of `"didnt_pick_up"`, `"not_interested"`, `"interested"`. The frontend enforces selection before submission.
+- **`callback_date: str | None`**: Optional ISO date string (e.g., `"2026-05-01"`) for when the contact should be called back. Only meaningful when `outcome` is `"didnt_pick_up"`. If omitted, the backend computes the callback date using the global `settings.retry_days` value.
 
 ### `CallLogOut`
 
@@ -75,6 +77,8 @@ Extended response from `POST /calls/log`:
 - **`call_log: CallLogOut`**: The created call log.
 - **`sms_prompt_needed: bool`**: If True, the frontend should show the SMS dialog. This is True when: (1) this was a new occasion, (2) the occasion count just reached the SMS threshold, and (3) SMS hasn't been sent yet.
 - **`occasion_count: int`**: The updated total occasion count for this contact.
+- **`times_called: int`**: Total number of calls made to this contact.
+- **`retry_at: str | None`**: The confirmed callback date (ISO format). Non-null when the outcome was `"didnt_pick_up"` — either the custom `callback_date` sent by the client or the auto-computed value from `retry_days`. Null for all other outcomes.
 
 ---
 
@@ -99,10 +103,11 @@ Read model for `GET /settings`. Returns the single global settings row:
 
 - **`sms_call_threshold: int`**: After this many separate-day call occasions, the SMS prompt appears.
 - **`sms_template: str`**: The message template with `<variable>` placeholders.
+- **`retry_days: int`**: Default number of days before a "didn't pick up" contact reappears in the caller's queue. Defaults to 3. This value is used when the caller does not specify a custom callback date.
 
 ### `SettingsUpdate`
 
-Write model for `PUT /settings`. Both fields are optional — you can update just the threshold, just the template, or both:
+Write model for `PUT /settings`. All fields are optional — you can update any subset:
 
 - Uses `model_dump(exclude_none=True)` in the router to only send changed fields to the database.
 

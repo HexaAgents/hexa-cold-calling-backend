@@ -48,6 +48,7 @@ def log_call(
     call_method: str,
     phone_number_called: str | None,
     outcome: str,
+    callback_date: str | None = None,
 ) -> dict:
     """Log a call and determine if SMS prompt is needed.
 
@@ -79,9 +80,14 @@ def log_call(
 
     global_settings = settings_repo.get_settings(db)
 
+    retry_at_value: str | None = None
     if outcome == "didnt_pick_up":
-        retry_days = global_settings.get("retry_days", 3)
-        update_data["retry_at"] = (date.today() + timedelta(days=retry_days)).isoformat()
+        if callback_date:
+            retry_at_value = callback_date
+        else:
+            retry_days = global_settings.get("retry_days", 3)
+            retry_at_value = (date.today() + timedelta(days=retry_days)).isoformat()
+        update_data["retry_at"] = retry_at_value
     else:
         update_data["retry_at"] = None
 
@@ -99,4 +105,5 @@ def log_call(
         "sms_prompt_needed": sms_prompt_needed,
         "occasion_count": occasion_count,
         "times_called": times_called,
+        "retry_at": retry_at_value,
     }
