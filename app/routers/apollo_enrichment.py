@@ -82,3 +82,64 @@ def retry_stale_enrichments(
 def enrichment_status(current_user: CurrentUserDep, db: SupabaseDep):
     """Return a full health summary used by the import page banner."""
     return apollo_service.get_enrichment_health(db)
+
+
+@router.post("/enrich/debug")
+def debug_apollo_call(
+    body: EnrichRequest,
+    current_user: CurrentUserDep,
+    db: SupabaseDep,
+):
+    """TEMPORARY debug: synchronously call Apollo with one contact_id and return the raw response.
+
+    Used to diagnose why contacts are being marked enrichment_failed in prod.
+    Remove after diagnosis is complete.
+    """
+    import httpx
+    from app.config import settings
+    if not body.contact_ids:
+        raise HTTPException(status_code=400, detail="contact_ids required")
+
+    result = (
+        db.table("contacts")
+        .select("*")
+        .in_("id", body.contact_ids[:1])
+        .execute()
+    )
+    if not result.data:
+        return {"error": "contact not found"}
+    c = result.data[0]
+
+    detail = {}
+    if c.get("first_name"): detail["first_name"] = c["first_name"]
+    if c.get("last_name"): detail["last_name"] = c["last_name"]
+    if c.get("email"): detail["email"] = c["email"]
+    if c.get("person_linkedin_url"): detail["linkedin_url"] = c["person_linkedin_url"]
+    if c.get("company_name"): detail["organization_name"] = c["company_name"]
+
+    webhook_url = f"{settings.backend_public_url.rstrip('/')}/apollo/webhook/phone"
+
+    try:
+        r = httpx.post(
+            "https://api.apollo.io/api/v1/people/bulk_match",
+            headers={
+                "x-api-key": settings.apollo_api_key,
+                "Content-Type": "application/json",
+                "Cache-Control": "no-cache",
+            },
+            json={
+                "details": [detail],
+                "reveal_phone_number": True,
+                "webhook_url": webhook_url,
+            },
+            timeout=30.0,
+        )
+        return {
+            "apollo_status": r.status_code,
+            "apollo_body": r.text[:2000],
+            "request_detail": detail,
+            "apollo_api_key_present": bool(settings.apollo_api_key),
+            "webhook_url": webhook_url,
+        }
+    except Exception as exc:
+        return {"error": str(exc)[:500]}
