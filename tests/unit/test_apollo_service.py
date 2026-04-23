@@ -238,7 +238,14 @@ class TestEnrichContacts:
         result = enrich_contacts(db, None)
 
         assert result.get("no_credits") is True
-        mock_repo.update_contact.assert_not_called()
+        # On 429 the service marks the already-tried batch with
+        # last_enrichment_error='apollo_no_credits' so the auto-sweep can skip
+        # them until the user manually clears via the Retry button. No status
+        # flip, just the error marker + attempt timestamp.
+        for call in mock_repo.update_contact.call_args_list:
+            update = call.args[2]
+            assert "enrichment_status" not in update
+            assert update.get("last_enrichment_error") == "apollo_no_credits"
 
     @patch("app.services.apollo_service.time")
     @patch("app.services.apollo_service.settings")

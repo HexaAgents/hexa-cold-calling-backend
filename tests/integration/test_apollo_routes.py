@@ -34,14 +34,30 @@ class TestEnrichStatus:
             .select.return_value \
             .eq.return_value \
             .execute.return_value = _make_execute_result([], count=5)
+        # Some queries (stale_enriching) chain .lt() after .eq(), so also wire that branch.
+        mock_supabase.table.return_value \
+            .select.return_value \
+            .eq.return_value \
+            .lt.return_value \
+            .execute.return_value = _make_execute_result([], count=5)
+        mock_supabase.table.return_value \
+            .select.return_value \
+            .eq.return_value \
+            .gte.return_value \
+            .execute.return_value = _make_execute_result([], count=5)
 
         resp = client.get("/apollo/enrich/status")
         assert resp.status_code == 200
         body = resp.json()
-        assert "pending_enrichment" in body
-        assert "enriching" in body
-        assert "enriched" in body
-        assert "enrichment_failed" in body
+        assert "counts_by_status" in body
+        counts = body["counts_by_status"]
+        assert "pending_enrichment" in counts
+        assert "enriching" in counts
+        assert "enriched" in counts
+        assert "enrichment_failed" in counts
+        assert "enrichment_no_phone" in counts
+        assert "out_of_credits" in body
+        assert "stale_enriching_count" in body
 
 
 class TestPhoneWebhook:
