@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 
 class ContactOut(BaseModel):
@@ -11,7 +11,7 @@ class ContactOut(BaseModel):
     first_name: str | None = None
     last_name: str | None = None
     title: str | None = None
-    company_name: str
+    company_name: str = ""
     person_linkedin_url: str | None = None
     website: str | None = None
     company_linkedin_url: str | None = None
@@ -45,6 +45,16 @@ class ContactOut(BaseModel):
     assigned_at: datetime | None = None
     retry_at: datetime | None = None
     created_at: datetime | None = None
+
+    @field_validator("exa_scrape_success", "scoring_failed", "sms_sent", mode="before")
+    @classmethod
+    def none_to_false(cls, v: object) -> bool:
+        return bool(v) if v is not None else False
+
+    @field_validator("call_occasion_count", "times_called", mode="before")
+    @classmethod
+    def none_to_zero(cls, v: object) -> int:
+        return int(v) if v is not None else 0
 
 
 class ContactUpdate(BaseModel):
