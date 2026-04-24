@@ -115,13 +115,13 @@ Simulates a successful Exa scrape. The function returns a tuple: `(scraped_text,
 ```python
         mock_openai.return_value = {
             "score": 85,
-            "company_type": "manufacturer",
-            "rationale": "ACME is a manufacturer of industrial valves.",
+            "company_type": "distributor",
+            "rationale": "ACME is an industrial distributor of valves and fittings.",
             "rejection_reason": None,
         }
 ```
 
-Simulates OpenAI returning a structured scoring result. Score 85 means high-quality lead. `rejection_reason` is `None` because the company passed scoring.
+Simulates OpenAI returning a structured scoring result. Score 85 means high-quality lead (confirmed industrial distributor). `rejection_reason` is `None` because the company passed scoring.
 
 ```python
         result = score_website(
@@ -145,7 +145,7 @@ Calls the real `score_website` function with fake API keys. Because both depende
 
 Four assertions verify the happy path:
 - The score from OpenAI is passed through unchanged.
-- The company type is passed through unchanged.
+- The company type (`"distributor"`) is passed through unchanged.
 - `exa_scrape_success` reflects the `True` from the Exa mock.
 - `scoring_failed` is `False` because no exception was raised.
 

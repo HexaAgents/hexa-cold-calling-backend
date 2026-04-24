@@ -118,7 +118,7 @@ def _mock_deps():
 def _good_score(score=85):
     return {
         "score": score,
-        "company_type": "manufacturer",
+        "company_type": "distributor",
         "rationale": "Great fit",
         "rejection_reason": None,
         "exa_scrape_success": True,

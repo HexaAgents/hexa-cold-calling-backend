@@ -278,7 +278,7 @@ else:
     discarded += 1
 ```
 
-The filtering decision. A contact is inserted if **either**: (a) the score is greater than 0 (the company qualifies), or (b) scoring failed (`is_failed` is `True`), because failed contacts should be visible in the UI for manual review or retry. Contacts with score = 0 and no failure are discarded — they represent companies that the AI determined are not relevant. The contact dict is built by merging the mapped CSV row with the score data and tagging it with `import_batch_id`.
+The filtering decision. A contact is inserted if **either**: (a) the score is greater than 0 (the company qualifies), or (b) scoring failed (`is_failed` is `True`), because failed contacts should be visible in the UI for manual review or retry. Contacts with score = 0 and no failure are discarded — they represent companies that the AI determined are not industrial distributors. The contact dict is built by merging the mapped CSV row with the score data and tagging it with `import_batch_id`. Phone enrichment is only queued for contacts scoring >= `ENRICHMENT_MIN_SCORE` (50) that lack a mobile phone — this prevents wasting Apollo credits on low-confidence leads.
 
 ```python
 if contacts_to_insert:

@@ -17,8 +17,11 @@ DEFAULT_ERROR_RESULT: dict = {
     "rejection_reason": "unclear",
 }
 
-VALID_COMPANY_TYPES = {"manufacturer", "distributor", "wholesaler", "rejected"}
-VALID_REJECTION_REASONS = {"service_provider", "consultancy", "automation_company", "unclear", None}
+VALID_COMPANY_TYPES = {"distributor", "rejected"}
+VALID_REJECTION_REASONS = {
+    "manufacturer", "wholesaler", "service_provider", "consultancy",
+    "automation_company", "unclear", None,
+}
 
 
 def score_company(

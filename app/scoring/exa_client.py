@@ -73,7 +73,7 @@ def _get_page(client: Exa, url: str) -> str:
 
 def _search_fallback(client: Exa, company_name: str) -> str:
     try:
-        query = f"{company_name} manufacturer distributor wholesaler"
+        query = f"{company_name} industrial distributor supplier"
         result = client.search_and_contents(
             query,
             type="auto",

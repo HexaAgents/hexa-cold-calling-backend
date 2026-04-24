@@ -8,11 +8,11 @@ def test_score_website_success():
         patch("app.services.scoring_service.fetch_company_info") as mock_exa,
         patch("app.services.scoring_service.score_company") as mock_openai,
     ):
-        mock_exa.return_value = ("ACME manufactures industrial valves...", True)
+        mock_exa.return_value = ("ACME distributes industrial valves and fittings...", True)
         mock_openai.return_value = {
             "score": 85,
-            "company_type": "manufacturer",
-            "rationale": "ACME is a manufacturer of industrial valves.",
+            "company_type": "distributor",
+            "rationale": "ACME is an industrial distributor of valves and fittings.",
             "rejection_reason": None,
         }
 
@@ -28,7 +28,7 @@ def test_score_website_success():
         )
 
         assert result["score"] == 85
-        assert result["company_type"] == "manufacturer"
+        assert result["company_type"] == "distributor"
         assert result["exa_scrape_success"] is True
         assert result["scoring_failed"] is False
 

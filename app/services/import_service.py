@@ -36,6 +36,7 @@ COLUMN_MAP: dict[str, str] = {
 BATCH_SIZE = 10
 MAX_SCORING_WORKERS = 8
 SCORING_TIMEOUT = 90
+ENRICHMENT_MIN_SCORE = 50
 
 _FAILED_SCORE: dict[str, object] = {
     "score": 0,
@@ -85,7 +86,10 @@ def process_csv_upload(
         to_score: dict[str, dict[str, str]] = {}
         for row in batch_rows:
             w = row.get("website", "")
-            if w and w not in scored_cache and w not in to_score:
+            if not w or w in to_score:
+                continue
+            cached = scored_cache.get(w)
+            if not cached or cached.get("company_type") != "distributor":
                 to_score[w] = {
                     "company_name": row.get("company_name", ""),
                     "job_title": row.get("title", ""),
@@ -111,7 +115,7 @@ def process_csv_upload(
             if score_val > 0 or is_failed:
                 contact = {**row, **score_data, "import_batch_id": batch_id}
                 has_mobile = bool(row.get("mobile_phone"))
-                if not has_mobile:
+                if not has_mobile and score_val >= ENRICHMENT_MIN_SCORE:
                     contact["enrichment_status"] = "pending_enrichment"
                 contacts_to_insert.append(contact)
                 stored += 1

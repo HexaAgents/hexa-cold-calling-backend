@@ -1,6 +1,6 @@
 # Scoring — AI-Powered Lead Qualification
 
-This module handles all AI-powered company scoring. When contacts are imported via CSV, the scoring pipeline runs for each unique website to determine whether the company is a potential Hexa client (a manufacturer, distributor, or wholesaler) and assigns a score from 0-100.
+This module handles all AI-powered company scoring. When contacts are imported via CSV, the scoring pipeline runs for each unique website to determine whether the company is an industrial distributor and assigns a score from 0-100.
 
 The pipeline has three stages:
 
@@ -26,34 +26,30 @@ The pipeline has three stages:
 
 A single multi-line string that defines the LLM's entire scoring persona and rules. This is the most business-critical piece of text in the application — changing a single sentence here changes how every lead is scored.
 
-**Lines 2-3 — Identity:** Establishes the LLM as a "B2B lead qualification assistant for Hexa" and describes what Hexa does (AI automation for mid-market manufacturers, distributors, wholesalers — procurement, quoting, order entry, AP/AR, invoice matching, vendor management, customer service with ERP integration).
+**Lines 2-3 — Identity:** Establishes the LLM as a "B2B lead qualification assistant for Hexa" and describes what Hexa does (AI automation for industrial distributors — procurement, quoting, order entry, AP/AR, invoice matching, vendor management, customer service with ERP integration).
 
-**Lines 6-12 — ACCEPT rules:** Three categories of companies that are potential customers:
-- **Manufacturers of ANY product.** The prompt explicitly lists a long non-exhaustive set of product categories (industrial equipment, automation equipment, robotics, electronics, chemicals, food, building materials, plastics, metals, textiles, automotive parts, packaging, medical devices, aerospace components, machinery, sensors, control systems) and ends with the principle: "if a company manufactures or assembles a physical product of any kind, they are a potential customer regardless of what that product is."
-- **Distributors of physical products** (with another explicit list of distribution categories).
-- **Wholesalers of physical goods.**
+**Lines 6-9 — ACCEPT rules:** A single category of companies that are potential customers:
+- **Industrial distributors** — companies whose primary business is distributing, supplying, or reselling physical industrial products. The prompt lists a comprehensive but non-exhaustive set of product categories (electrical supplies, PVF, HVAC, MRO, safety/PPE, fasteners, bearings, power transmission, cutting tools, fluid power, janitorial, welding, adhesives, industrial gases, building materials, packaging, material handling, pumps, motors, filtration, lab supplies).
 
-**Lines 13 — Critical disambiguation:** This paragraph addresses a common LLM confusion. A company that *manufactures* automation equipment is still a manufacturer and should be accepted. Hexa automates internal business workflows — the type of product is irrelevant. Only companies that sell pure software or services for automation should be rejected. This paragraph exists because early scoring runs incorrectly rejected companies like "ABC Robotics" (a robot manufacturer) as automation companies.
-
-**Lines 15-26 — REJECT rules with labels:**
-- `"service_provider"` — consulting, staffing, marketing, law, accounting, IT services, managed services, engineering services, logistics-only (3PLs without inventory), cleaning, construction contractors.
+**Lines 11-24 — REJECT rules with labels:**
+- `"manufacturer"` — companies whose primary business is manufacturing, producing, or assembling physical products. Even if they also distribute, if manufacturing is their core identity, they are rejected.
+- `"wholesaler"` — pure wholesalers of non-industrial goods (food, consumer, fashion, agricultural). Companies that distribute industrial products are classified as distributors even if they call themselves wholesalers.
+- `"service_provider"` — consulting, staffing, marketing, law, accounting, IT services, managed services, engineering services, logistics-only (3PLs without inventory), cleaning, construction contractors, repair/maintenance, installation contractors.
 - `"consultancy"` — management consultancies, strategy firms, advisory firms.
-- `"automation_company"` — **Only** pure software, SaaS, or consulting for manufacturing automation. NOT hardware manufacturers. This distinction is reinforced a second time to prevent misclassification.
+- `"automation_company"` — pure software, SaaS, or consulting for automation (ERP vendors, MES, supply chain SaaS, AI/ML tools). These are competitors, not customers.
 - `"unclear"` — insufficient website text to determine the company's business.
 
-**Lines 28-40 — Scoring rubric (0-100):**
+**Lines 26-38 — Scoring rubric (0-100):**
 
 | Tier | Score Range | Criteria |
 |---|---|---|
-| Top tier | 90-100 | Clearly a manufacturer/distributor/wholesaler. Mid-market size signals (multiple locations, 50-1500 employees, $20M-$300M revenue). Contact has an operational/leadership title (VP Ops, COO, CFO, Supply Chain Director, IT Director, GM, Owner, President, Purchasing Manager, Operations Manager). |
-| Strong fit | 70-89 | Clearly a manufacturer/distributor/wholesaler. Either company size is outside Hexa's sweet spot (too small or too large) or contact title is less directly relevant (sales manager, project manager, marketing director, engineer). |
-| Possible fit | 50-69 | Manufacturer/distributor/wholesaler but ambiguous — company might do manufacturing AND services, or the industry is tangential (construction + distribution, retailer + wholesale). |
-| Human review | 30 | Edge case — cannot confidently classify. Exactly 30 (not a range) so the human review queue can filter precisely on this value. |
-| Not a fit | 0-29 | Service provider, consultancy, software company, or unrelated industry. |
+| Top tier | 90-100 | Clearly an industrial distributor. Contact has an operational/leadership title (VP Ops, COO, CFO, Supply Chain Director, IT Director, GM, Owner, President, Purchasing Manager, Operations Manager, Branch Manager). |
+| Strong fit | 70-89 | Clearly an industrial distributor, but the contact's title is less directly relevant (sales manager, marketing director, project manager, engineer, account manager). |
+| Possible fit | 50-69 | Likely an industrial distributor but the website is ambiguous — the company may do distribution AND other activities. |
+| Human review | 30-49 | Some distributor signals but significant uncertainty. Assigned in this range for human review. |
+| Not a fit | 0-29 | Not an industrial distributor, manufacturer, service provider, software company, or unrelated industry. |
 
-A key rule: **any company that is clearly a manufacturer of any product must score 50 or above.** This prevents the LLM from scoring a legitimate manufacturer below 50 because of, say, an unfamiliar niche.
-
-**Lines 42-48 — Output format:** Instructs the LLM to respond with valid JSON only, in the exact format: `score` (int 0-100), `company_type` (manufacturer|distributor|wholesaler|rejected), `rationale` (1-2 sentence explanation), `rejection_reason` (null or one of the four rejection labels).
+**Lines 40-46 — Output format:** Instructs the LLM to respond with valid JSON only, in the exact format: `score` (int 0-100), `company_type` (distributor|rejected), `rationale` (1-2 sentence explanation), `rejection_reason` (null or one of the six rejection labels), `company_description` (2-sentence sales briefing).
 
 ### `USER_MESSAGE_TEMPLATE` (lines 50-55)
 
@@ -137,7 +133,7 @@ def _search_fallback(client: Exa, company_name: str) -> str:
 
 When direct URL extraction fails or yields too little text, this function searches Exa's web index for the company.
 
-**Line 63 — Query construction:** The query is `"{company_name} manufacturer distributor wholesaler"`. The three keywords are appended to bias results toward pages that describe the company's manufacturing/distribution/wholesale operations, which is exactly what the scoring rubric needs.
+**Line 63 — Query construction:** The query is `"{company_name} industrial distributor supplier"`. The keywords are appended to bias results toward pages that describe the company's industrial distribution operations, which is exactly what the scoring rubric needs.
 
 **Lines 64-69 — Search call:** `search_and_contents()` combines search and content extraction in one API call. Parameters:
 - `type="auto"` — lets Exa choose the best search strategy.
@@ -163,13 +159,13 @@ DEFAULT_ERROR_RESULT: dict = {
     "rejection_reason": "unclear",
 }
 
-VALID_COMPANY_TYPES = {"manufacturer", "distributor", "wholesaler", "rejected"}
-VALID_REJECTION_REASONS = {"service_provider", "consultancy", "automation_company", "unclear", None}
+VALID_COMPANY_TYPES = {"distributor", "rejected"}
+VALID_REJECTION_REASONS = {"manufacturer", "wholesaler", "service_provider", "consultancy", "automation_company", "unclear", None}
 ```
 
 - `DEFAULT_ERROR_RESULT` — The fallback result returned when the OpenAI API fails after both retry attempts. Scores the company as 0/rejected/unclear so it doesn't appear as a qualified lead in the frontend. The rationale `"OpenAI API error"` makes it clear to human reviewers that this is a system failure, not a genuine rejection.
-- `VALID_COMPANY_TYPES` — Allowlist of `company_type` values the LLM may return. Anything outside this set is corrected to `"rejected"`.
-- `VALID_REJECTION_REASONS` — Allowlist of `rejection_reason` values. Includes `None` because accepted companies should have a null rejection reason. Anything outside this set is corrected to `"unclear"`.
+- `VALID_COMPANY_TYPES` — Allowlist of `company_type` values the LLM may return (`"distributor"` or `"rejected"`). Anything outside this set is corrected to `"rejected"`.
+- `VALID_REJECTION_REASONS` — Allowlist of `rejection_reason` values (`"manufacturer"`, `"wholesaler"`, `"service_provider"`, `"consultancy"`, `"automation_company"`, `"unclear"`, or `None`). Includes `None` because accepted companies should have a null rejection reason. Anything outside this set is corrected to `"unclear"`.
 
 ### `score_company()` (lines 24-47)
 
@@ -229,7 +225,7 @@ Parses and validates the raw JSON string from the LLM. This function is **defens
 - If it's not an integer (e.g. the LLM returned a float or a string), attempts to cast it with `int()`. If that fails (e.g. `"high"`), falls back to `0`.
 - Clamps the value to the 0-100 range with `max(0, min(100, score))`. This prevents out-of-bounds scores like `-5` or `150` that would break frontend display logic.
 
-**Lines 86-88 — Company type validation:** Extracts `company_type`, defaulting to `"rejected"`. If the value is not in `VALID_COMPANY_TYPES` (e.g. the LLM returned `"manufacturing"` instead of `"manufacturer"`), it is corrected to `"rejected"`. This is a conservative default — an unknown type is treated as a rejection rather than a false acceptance.
+**Lines 86-88 — Company type validation:** Extracts `company_type`, defaulting to `"rejected"`. If the value is not in `VALID_COMPANY_TYPES` (e.g. the LLM returned `"manufacturer"` or `"wholesaler"`), it is corrected to `"rejected"`. This is a conservative default — an unknown type is treated as a rejection rather than a false acceptance.
 
 **Lines 90-92 — Rejection reason validation:** Extracts `rejection_reason`. If the value is not in `VALID_REJECTION_REASONS` (which includes `None`), it is corrected to `"unclear"`.
 
@@ -239,8 +235,9 @@ Parses and validates the raw JSON string from the LLM. This function is **defens
 
 ## End-to-End Scoring Flow
 
-1. **CSV import triggers scoring** — The import service extracts unique websites from the uploaded CSV and calls `contact_repo.get_existing_scores()` to skip already-scored websites.
+1. **CSV import triggers scoring** — The import service extracts unique websites from the uploaded CSV and calls `contact_repo.get_existing_scores()` to check for already-scored websites. Only cached scores where `company_type == "distributor"` are trusted; all other cached types force a re-score under the current prompt.
 2. **Content extraction** — For each unscored website, `exa_client.fetch_company_info()` fetches website text (direct URL → about pages → search fallback). Text is truncated to 8000 characters.
 3. **LLM scoring** — `openai_scorer.score_company()` sends the system prompt + company data to GPT-4o-mini in JSON mode with temperature 0.2.
-4. **Response validation** — `_parse_response()` validates every field: clamps score to 0-100, checks company_type and rejection_reason against allowlists, casts rationale to string.
-5. **Storage** — The validated scoring result (`score`, `company_type`, `rationale`, `rejection_reason`, `exa_scrape_success`) is written to the contact row via `contact_repo.update_contact()`.
+4. **Response validation** — `_parse_response()` validates every field: clamps score to 0-100, checks company_type against `{"distributor", "rejected"}` and rejection_reason against the allowlist, casts rationale to string.
+5. **Storage** — The validated scoring result (`score`, `company_type`, `rationale`, `rejection_reason`, `exa_scrape_success`) is written to the contact row via `contact_repo.create_contacts_batch()`.
+6. **Phone enrichment** — Contacts scoring >= 50 (confirmed distributors) that lack a mobile phone are automatically queued for Apollo enrichment (`enrichment_status = "pending_enrichment"`).

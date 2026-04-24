@@ -8,10 +8,10 @@ from app.scoring.openai_scorer import _parse_response
 def _valid_json(**overrides):
     data = {
         "score": 75,
-        "company_type": "manufacturer",
+        "company_type": "distributor",
         "rationale": "Good fit for cold calling",
         "rejection_reason": None,
-        "company_description": "Manufactures industrial pumps for the oil and gas industry. Serves mid-market clients across North America.",
+        "company_description": "Distributes industrial pumps and valves to the oil and gas industry. Serves mid-market clients across North America.",
     }
     data.update(overrides)
     return json.dumps(data)
@@ -22,7 +22,7 @@ class TestParseResponse:
         result = _parse_response(_valid_json())
 
         assert result["score"] == 75
-        assert result["company_type"] == "manufacturer"
+        assert result["company_type"] == "distributor"
         assert result["rationale"] == "Good fit for cold calling"
         assert result["rejection_reason"] is None
 
@@ -66,12 +66,12 @@ class TestParseResponse:
 
     def test_parse_company_description(self):
         result = _parse_response(_valid_json())
-        assert result["company_description"] == "Manufactures industrial pumps for the oil and gas industry. Serves mid-market clients across North America."
+        assert result["company_description"] == "Distributes industrial pumps and valves to the oil and gas industry. Serves mid-market clients across North America."
 
     def test_parse_missing_company_description(self):
         raw = json.dumps({
             "score": 75,
-            "company_type": "manufacturer",
+            "company_type": "distributor",
             "rationale": "Good fit",
             "rejection_reason": None,
         })

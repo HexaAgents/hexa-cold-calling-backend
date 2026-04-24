@@ -23,7 +23,7 @@ SAMPLE_CONTACT = {
     "company_type": "B2B SaaS",
     "rationale": "Good fit",
     "rejection_reason": None,
-    "company_description": "Manufactures widgets for the automotive industry. Serves OEMs across Europe.",
+    "company_description": "Distributes industrial supplies and MRO products. Serves mid-market clients across Europe.",
     "exa_scrape_success": True,
     "scoring_failed": False,
     "call_occasion_count": 2,
