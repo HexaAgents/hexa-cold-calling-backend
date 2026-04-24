@@ -44,7 +44,7 @@ def get_locations(current_user: CurrentUserDep, db: SupabaseDep):
     """Return distinct non-empty location values for filter dropdowns."""
     locations: dict[str, list[str]] = {"cities": [], "states": [], "countries": []}
     for field, key in [("city", "cities"), ("state", "states"), ("country", "countries")]:
-        result = db.table("contacts").select(field).or_("hidden.eq.false,hidden.is.null").not_.is_(field, "null").neq(field, "").execute()
+        result = db.table("contacts").select(field).not_.is_(field, "null").neq(field, "").execute()
         values = sorted({row[field] for row in (result.data or []) if row.get(field)})
         locations[key] = values
     return locations

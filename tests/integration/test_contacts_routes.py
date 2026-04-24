@@ -45,7 +45,6 @@ class TestGetLocations:
     def test_returns_distinct_locations(self, client, mock_supabase):
         mock_supabase.table.return_value \
             .select.return_value \
-            .or_.return_value \
             .not_.return_value \
             .neq.return_value \
             .execute.return_value = _make_execute_result([
@@ -71,7 +70,6 @@ class TestListContacts:
     def test_list_contacts_empty(self, client, mock_supabase):
         mock_supabase.table.return_value \
             .select.return_value \
-            .or_.return_value \
             .order.return_value \
             .range.return_value \
             .execute.return_value = _make_execute_result([], count=0)
@@ -87,7 +85,6 @@ class TestListContacts:
         second = {**SAMPLE_CONTACT, "id": "c-2", "company_name": "Beta Inc"}
         mock_supabase.table.return_value \
             .select.return_value \
-            .or_.return_value \
             .order.return_value \
             .range.return_value \
             .execute.return_value = _make_execute_result(
@@ -235,7 +232,6 @@ class TestListContactsWithSearch:
         mock_supabase.table.return_value \
             .select.return_value \
             .or_.return_value \
-            .or_.return_value \
             .order.return_value \
             .range.return_value \
             .execute.return_value = _make_execute_result([SAMPLE_CONTACT], count=1)
@@ -250,7 +246,6 @@ class TestListContactsWithSearch:
         mock_supabase.table.return_value \
             .select.return_value \
             .or_.return_value \
-            .or_.return_value \
             .order.return_value \
             .range.return_value \
             .execute.return_value = _make_execute_result([SAMPLE_CONTACT], count=1)
@@ -262,7 +257,6 @@ class TestListContactsWithSearch:
     def test_search_with_outcome_filter(self, client, mock_supabase):
         mock_supabase.table.return_value \
             .select.return_value \
-            .or_.return_value \
             .eq.return_value \
             .or_.return_value \
             .order.return_value \
@@ -276,7 +270,6 @@ class TestListContactsWithSearch:
     def test_search_empty_string_ignored(self, client, mock_supabase):
         mock_supabase.table.return_value \
             .select.return_value \
-            .or_.return_value \
             .order.return_value \
             .range.return_value \
             .execute.return_value = _make_execute_result([], count=0)

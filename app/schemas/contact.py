@@ -42,14 +42,12 @@ class ContactOut(BaseModel):
     assigned_to: str | None = None
     assigned_at: datetime | None = None
     retry_at: datetime | None = None
-    hidden: bool = False
     created_at: datetime | None = None
 
 
 class ContactUpdate(BaseModel):
     call_outcome: str | None = None
     messaging_status: str | None = None
-    hidden: bool | None = None
     retry_at: str | None = None
 
 
