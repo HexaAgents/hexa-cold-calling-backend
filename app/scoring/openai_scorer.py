@@ -19,8 +19,9 @@ DEFAULT_ERROR_RESULT: dict = {
 
 VALID_COMPANY_TYPES = {"distributor", "rejected"}
 VALID_REJECTION_REASONS = {
-    "manufacturer", "wholesaler", "service_provider", "consultancy",
-    "automation_company", "unclear", None,
+    "non_industrial_distributor", "manufacturer", "manufacturers_rep",
+    "fuel_distributor", "wholesaler", "service_provider", "consultancy",
+    "automation_company", "data_mismatch", "unclear", None,
 }
 
 

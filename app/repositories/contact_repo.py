@@ -18,7 +18,7 @@ def list_contacts(
     if sort_by not in VALID_SORT_COLUMNS:
         sort_by = "created_at"
 
-    query = db.table("contacts").select("*", count="exact")
+    query = db.table("contacts").select("*", count="exact").eq("hidden", False)
 
     if outcome_filter:
         query = query.eq("call_outcome", outcome_filter)
