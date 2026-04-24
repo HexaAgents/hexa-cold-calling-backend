@@ -235,21 +235,25 @@ class TestCallHistory:
 
 
 class TestDeleteCallLog:
-    def test_delete_call_log_success(self, client, mock_supabase):
-        mock_supabase.table.return_value \
-            .delete.return_value \
-            .eq.return_value \
-            .execute.return_value = _make_execute_result([SAMPLE_CALL_LOG])
+    @patch("app.services.call_service.contact_repo")
+    @patch("app.services.call_service.call_log_repo")
+    def test_delete_call_log_success(self, mock_call_log_repo, mock_contact_repo, client, mock_supabase):
+        mock_call_log_repo.get_call_log.return_value = SAMPLE_CALL_LOG
+        mock_call_log_repo.delete_call_log.return_value = True
+        mock_call_log_repo.count_call_logs_for_contact.return_value = 0
+        mock_call_log_repo.get_latest_call_log_for_contact.return_value = None
+        mock_contact_repo.update_contact.return_value = None
 
         resp = client.delete("/calls/log-1")
         assert resp.status_code == 200
-        assert resp.json()["detail"] == "Call log deleted"
+        body = resp.json()
+        assert body["contact_id"] == "c-1"
+        assert body["times_called"] == 0
+        assert body["call_outcome"] is None
 
-    def test_delete_call_log_not_found(self, client, mock_supabase):
-        mock_supabase.table.return_value \
-            .delete.return_value \
-            .eq.return_value \
-            .execute.return_value = _make_execute_result([])
+    @patch("app.services.call_service.call_log_repo")
+    def test_delete_call_log_not_found(self, mock_call_log_repo, client, mock_supabase):
+        mock_call_log_repo.get_call_log.return_value = None
 
         resp = client.delete("/calls/nonexistent")
         assert resp.status_code == 404
