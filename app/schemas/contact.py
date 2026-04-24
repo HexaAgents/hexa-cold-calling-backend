@@ -27,6 +27,7 @@ class ContactOut(BaseModel):
     rationale: str | None = None
     rejection_reason: str | None = None
     company_description: str | None = None
+    industry_tag: str | None = None
     exa_scrape_success: bool = False
     scoring_failed: bool = False
     call_occasion_count: int = 0

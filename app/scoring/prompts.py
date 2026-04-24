@@ -56,7 +56,8 @@ Respond ONLY with valid JSON in this exact format, no other text:
   "company_type": "<distributor|rejected>",
   "rationale": "<1-2 sentence explanation>",
   "rejection_reason": <null or "non_industrial_distributor" or "manufacturer" or "manufacturers_rep" or "fuel_distributor" or "wholesaler" or "service_provider" or "consultancy" or "automation_company" or "data_mismatch" or "unclear">,
-  "company_description": "<2 sentence summary of what this company does, written as if briefing a sales caller. Focus on their products, industry, and scale. Do not mention Hexa or scoring.>"
+  "company_description": "<2 sentence summary of what this company does, written as if briefing a sales caller. Focus on their products, industry, and scale. Do not mention Hexa or scoring.>",
+  "industry_tag": "<short NAICS-style industry label, e.g. 'Electrical Supplies', 'HVAC Equipment', 'Bearings & Power Transmission', 'Industrial MRO', 'Safety & PPE', 'Plumbing & PVF', 'Cutting Tools', 'Fluid Power'. Use the plain-English equivalent of the company's most specific NAICS code. Keep it under 5 words. For rejected companies, still provide the tag based on what the company actually does.>"
 }"""
 
 USER_MESSAGE_TEMPLATE = """\
