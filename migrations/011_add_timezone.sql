@@ -283,7 +283,7 @@ BEGIN
     AND (
       NOT p_business_hours_only
       OR c.timezone IS NULL
-      OR EXTRACT(HOUR FROM (NOW() AT TIME ZONE c.timezone)) IN (8, 9, 10, 11, 14, 15, 16, 17)
+      OR EXTRACT(HOUR FROM (NOW() AT TIME ZONE c.timezone)) IN (8, 9, 10, 11, 14, 15, 16)
     )
   ORDER BY
     CASE WHEN c.call_outcome = 'didnt_pick_up' THEN 0 ELSE 1 END,

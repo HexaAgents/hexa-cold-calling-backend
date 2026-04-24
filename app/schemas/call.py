@@ -27,6 +27,7 @@ class CallLogOut(BaseModel):
 class CallLogResponse(BaseModel):
     call_log: CallLogOut
     sms_prompt_needed: bool = False
+    email_prompt_needed: bool = False
     occasion_count: int = 0
     times_called: int = 0
     retry_at: str | None = None

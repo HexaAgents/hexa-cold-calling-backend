@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o-mini"
     apollo_api_key: str = ""
     backend_public_url: str = ""
+    google_client_id: str = ""
+    google_client_secret: str = ""
     frontend_url: str = "http://localhost:8080"
     allowed_origins: str = "http://localhost:8080,http://localhost:3000"
 

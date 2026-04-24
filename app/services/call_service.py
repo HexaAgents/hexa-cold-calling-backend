@@ -99,10 +99,16 @@ def log_call(
         if occasion_count >= threshold:
             sms_prompt_needed = True
 
+    email_prompt_needed = (
+        outcome in ("didnt_pick_up", "interested")
+        and bool((contact or {}).get("email"))
+    )
+
     return {
         "call_log": call_log,
         "is_new_occasion": is_new_occasion,
         "sms_prompt_needed": sms_prompt_needed,
+        "email_prompt_needed": email_prompt_needed,
         "occasion_count": occasion_count,
         "times_called": times_called,
         "retry_at": retry_at_value,
