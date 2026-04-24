@@ -92,8 +92,9 @@ def gmail_oauth_disconnect(current_user: CurrentUserDep, db: SupabaseDep):
 
 @router.post("/draft")
 def get_email_draft(body: DraftRequest, current_user: CurrentUserDep, db: SupabaseDep):
+    sender_name = (current_user.get("full_name") or "").split()[0] if current_user.get("full_name") else ""
     try:
-        return email_service.get_draft(db, body.contact_id, body.template_key)
+        return email_service.get_draft(db, body.contact_id, body.template_key, sender_name)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

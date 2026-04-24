@@ -20,6 +20,7 @@ def render_template(template: str, contact: dict) -> str:
         "<company_name>": contact.get("company_name") or "",
         "<title>": contact.get("title") or "",
         "<website>": contact.get("website") or "",
+        "<type>": contact.get("industry_tag") or "",
     }
     result = template
     for placeholder, value in replacements.items():

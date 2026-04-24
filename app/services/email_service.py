@@ -109,7 +109,7 @@ def _get_valid_access_token(db: Client, user_id: str) -> tuple[str, str]:
     return access_token, tokens["gmail_address"]
 
 
-def render_template(template: str, contact: dict) -> str:
+def render_template(template: str, contact: dict, sender_name: str = "") -> str:
     """Replace <variable> placeholders with contact values."""
     replacements = {
         "<first_name>": contact.get("first_name") or "",
@@ -117,6 +117,8 @@ def render_template(template: str, contact: dict) -> str:
         "<company_name>": contact.get("company_name") or "",
         "<title>": contact.get("title") or "",
         "<website>": contact.get("website") or "",
+        "<your_name>": sender_name,
+        "<type>": contact.get("industry_tag") or "",
     }
     result = template
     for placeholder, value in replacements.items():
@@ -124,7 +126,7 @@ def render_template(template: str, contact: dict) -> str:
     return result
 
 
-def get_draft(db: Client, contact_id: str, template_key: str) -> dict:
+def get_draft(db: Client, contact_id: str, template_key: str, sender_name: str = "") -> dict:
     """Render an email draft from a template for a contact.
 
     template_key: 'didnt_pick_up' or 'interested'
@@ -142,8 +144,8 @@ def get_draft(db: Client, contact_id: str, template_key: str) -> dict:
 
     return {
         "to": contact.get("email", ""),
-        "subject": render_template(subject_template, contact),
-        "body": render_template(body_template, contact),
+        "subject": render_template(subject_template, contact, sender_name),
+        "body": render_template(body_template, contact, sender_name),
         "contact_name": f"{contact.get('first_name', '')} {contact.get('last_name', '')}".strip(),
     }
 
