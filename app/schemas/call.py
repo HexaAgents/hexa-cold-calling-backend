@@ -30,3 +30,9 @@ class CallLogResponse(BaseModel):
     occasion_count: int = 0
     times_called: int = 0
     retry_at: str | None = None
+
+
+class CallLogDeleteResponse(BaseModel):
+    contact_id: str
+    times_called: int = 0
+    call_outcome: str | None = None

@@ -50,6 +50,7 @@ class ContactUpdate(BaseModel):
     call_outcome: str | None = None
     messaging_status: str | None = None
     hidden: bool | None = None
+    retry_at: str | None = None
 
 
 class ContactListParams(BaseModel):

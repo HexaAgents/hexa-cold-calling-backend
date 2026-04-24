@@ -107,3 +107,36 @@ def log_call(
         "times_called": times_called,
         "retry_at": retry_at_value,
     }
+
+
+def delete_call_log(db: Client, call_id: str) -> dict:
+    """Delete a call log and update the contact's times_called and call_outcome accordingly.
+
+    times_called is always kept equal to the number of remaining call logs.
+    call_outcome is set to the most recent remaining log's outcome, or cleared.
+    """
+    call_log = call_log_repo.get_call_log(db, call_id)
+    if not call_log:
+        return {"deleted": False}
+
+    contact_id = call_log["contact_id"]
+    call_log_repo.delete_call_log(db, call_id)
+
+    remaining_count = call_log_repo.count_call_logs_for_contact(db, contact_id)
+    latest = call_log_repo.get_latest_call_log_for_contact(db, contact_id)
+
+    update_data: dict = {
+        "times_called": remaining_count,
+        "call_outcome": latest["outcome"] if latest else None,
+    }
+    if not latest or latest.get("outcome") != "didnt_pick_up":
+        update_data["retry_at"] = None
+
+    contact_repo.update_contact(db, contact_id, update_data)
+
+    return {
+        "deleted": True,
+        "contact_id": contact_id,
+        "times_called": remaining_count,
+        "call_outcome": latest["outcome"] if latest else None,
+    }

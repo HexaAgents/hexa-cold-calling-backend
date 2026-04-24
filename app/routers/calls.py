@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query
 
 from app.dependencies import SupabaseDep, CurrentUserDep
-from app.schemas.call import CallLogCreate, CallLogResponse, CallLogOut
+from app.schemas.call import CallLogCreate, CallLogResponse, CallLogDeleteResponse, CallLogOut
 from app.schemas.contact import ContactOut
 from app.services import call_service
 from app.repositories import call_log_repo
@@ -104,9 +104,13 @@ def get_call_history(contact_id: str, current_user: CurrentUserDep, db: Supabase
     return [CallLogOut(**log) for log in logs]
 
 
-@router.delete("/{call_id}")
+@router.delete("/{call_id}", response_model=CallLogDeleteResponse)
 def delete_call_log(call_id: str, current_user: CurrentUserDep, db: SupabaseDep):
-    result = db.table("call_logs").delete().eq("id", call_id).execute()
-    if not result.data:
+    result = call_service.delete_call_log(db, call_id)
+    if not result.get("deleted"):
         raise HTTPException(status_code=404, detail="Call log not found")
-    return {"detail": "Call log deleted"}
+    return CallLogDeleteResponse(
+        contact_id=result["contact_id"],
+        times_called=result["times_called"],
+        call_outcome=result["call_outcome"],
+    )
