@@ -7,7 +7,7 @@ from datetime import date, timedelta
 from fastapi import APIRouter, Query
 
 from app.dependencies import SupabaseDep, CurrentUserDep
-from app.schemas.productivity import ProductivityUser, ProductivityRow, ProductivityResponse
+from app.schemas.productivity import ProductivityUser, ProductivityRow, ProductivityResponse, OutcomeBreakdown, UserOutcomeBreakdown
 
 logger = logging.getLogger(__name__)
 
@@ -35,19 +35,51 @@ def get_productivity(
 
     result = (
         db.table("call_logs")
-        .select("user_id, call_date")
+        .select("user_id, call_date, outcome")
         .gte("call_date", cutoff)
         .execute()
     )
 
     pivot: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    overall: dict[str, int] = defaultdict(int)
+    per_user: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+
     for row in result.data or []:
         d = row["call_date"]
         uid = row["user_id"]
+        outcome = row.get("outcome") or "other"
         pivot[d][uid] += 1
+        overall[outcome] += 1
+        overall["total"] += 1
+        per_user[uid][outcome] += 1
+        per_user[uid]["total"] += 1
 
     rows: list[ProductivityRow] = []
     for d in sorted(pivot.keys(), reverse=True):
         rows.append(ProductivityRow(date=d, counts=dict(pivot[d])))
 
-    return ProductivityResponse(users=users, rows=rows)
+    def _breakdown(counts: dict[str, int]) -> OutcomeBreakdown:
+        return OutcomeBreakdown(
+            total=counts.get("total", 0),
+            didnt_pick_up=counts.get("didnt_pick_up", 0),
+            interested=counts.get("interested", 0),
+            not_interested=counts.get("not_interested", 0),
+            bad_number=counts.get("bad_number", 0),
+            other=counts.get("total", 0) - counts.get("didnt_pick_up", 0) - counts.get("interested", 0) - counts.get("not_interested", 0) - counts.get("bad_number", 0),
+        )
+
+    user_breakdowns = [
+        UserOutcomeBreakdown(
+            user_id=uid,
+            first_name=user_map.get(uid, "Unknown"),
+            breakdown=_breakdown(per_user[uid]),
+        )
+        for uid in per_user
+    ]
+
+    return ProductivityResponse(
+        users=users,
+        rows=rows,
+        overall_breakdown=_breakdown(overall),
+        per_user_breakdown=user_breakdowns,
+    )

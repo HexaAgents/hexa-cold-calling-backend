@@ -10,7 +10,7 @@ from app.repositories import call_log_repo
 
 router = APIRouter(prefix="/calls", tags=["calls"])
 
-CLAIM_EXPIRE_MINUTES = 30
+CLAIM_EXPIRE_MINUTES = 60
 
 
 @router.post("/token")
@@ -72,6 +72,8 @@ def get_my_queue(current_user: CurrentUserDep, db: SupabaseDep):
         .select("*")
         .eq("assigned_to", current_user["id"])
         .is_("call_outcome", "null")
+        .neq("company_type", "rejected")
+        .or_("hidden.is.null,hidden.eq.false")
         .order("score", desc=True)
         .execute()
     )

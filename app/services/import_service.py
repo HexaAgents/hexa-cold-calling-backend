@@ -114,6 +114,8 @@ def process_csv_upload(
 
             if score_val > 0 or is_failed:
                 contact = {**row, **score_data, "import_batch_id": batch_id}
+                if score_data.get("company_type") == "rejected":
+                    contact["hidden"] = True
                 has_mobile = bool(row.get("mobile_phone"))
                 if not has_mobile and score_val >= ENRICHMENT_MIN_SCORE:
                     contact["enrichment_status"] = "pending_enrichment"
