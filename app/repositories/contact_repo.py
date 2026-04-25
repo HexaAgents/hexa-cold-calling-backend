@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from supabase import Client
 
+STALE_CLAIM_HOURS = 10
 
 VALID_SORT_COLUMNS = {"created_at", "call_occasion_count", "times_called", "call_outcome", "score"}
 
@@ -94,6 +97,20 @@ def get_existing_scores(db: Client, websites: list[str]) -> dict[str, dict]:
             if w and w not in scores:
                 scores[w] = row
     return scores
+
+
+def release_stale_claims(db: Client) -> int:
+    """Release contacts claimed more than STALE_CLAIM_HOURS ago with no outcome."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=STALE_CLAIM_HOURS)).isoformat()
+    result = (
+        db.table("contacts")
+        .update({"assigned_to": None, "assigned_at": None})
+        .not_.is_("assigned_to", "null")
+        .is_("call_outcome", "null")
+        .lt("assigned_at", cutoff)
+        .execute()
+    )
+    return len(result.data) if result.data else 0
 
 
 def get_contacts_needing_sms(db: Client) -> list[dict]:

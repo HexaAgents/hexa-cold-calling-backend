@@ -6,7 +6,7 @@ from app.dependencies import SupabaseDep, CurrentUserDep
 from app.schemas.call import CallLogCreate, CallLogResponse, CallLogDeleteResponse, CallLogOut
 from app.schemas.contact import ContactOut
 from app.services import call_service
-from app.repositories import call_log_repo
+from app.repositories import call_log_repo, contact_repo
 
 router = APIRouter(prefix="/calls", tags=["calls"])
 
@@ -38,6 +38,7 @@ def claim_next_contact(
     When business_hours_only is true, only contacts whose local time is in
     8:00-11:59 or 14:00-17:59 are returned (plus contacts with unknown timezone).
     """
+    contact_repo.release_stale_claims(db)
     result = db.rpc(
         "claim_next_contact",
         {
@@ -67,6 +68,7 @@ def release_contact(contact_id: str, current_user: CurrentUserDep, db: SupabaseD
 @router.get("/my-queue", response_model=list[ContactOut])
 def get_my_queue(current_user: CurrentUserDep, db: SupabaseDep):
     """Return all contacts currently claimed by the current user."""
+    contact_repo.release_stale_claims(db)
     result = (
         db.table("contacts")
         .select("*")
