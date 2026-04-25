@@ -5,8 +5,12 @@ from fastapi import APIRouter, HTTPException, Query
 from app.dependencies import SupabaseDep, CurrentUserDep
 from app.schemas.call import CallLogCreate, CallLogResponse, CallLogDeleteResponse, CallLogOut
 from app.schemas.contact import ContactOut
-from app.services import call_service
+import logging
+
+from app.services import call_service, email_service
 from app.repositories import call_log_repo, contact_repo
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/calls", tags=["calls"])
 
@@ -93,6 +97,16 @@ def log_call(body: CallLogCreate, current_user: CurrentUserDep, db: SupabaseDep)
         outcome=body.outcome,
         callback_date=body.callback_date,
     )
+
+    try:
+        contact = contact_repo.get_contact(db, body.contact_id)
+        if contact and contact.get("email"):
+            email_service.sync_emails_for_contact(
+                db, current_user["id"], contact["email"], body.contact_id,
+            )
+    except Exception as exc:
+        _log.debug("Email tracking sync skipped for %s: %s", body.contact_id, exc)
+
     return CallLogResponse(
         call_log=CallLogOut(**result["call_log"]),
         sms_prompt_needed=result["sms_prompt_needed"],

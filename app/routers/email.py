@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 from app.config import settings
 from app.dependencies import SupabaseDep, CurrentUserDep
-from app.repositories import email_repo
+from app.repositories import email_repo, email_tracking_repo
 from app.services import email_service
 
 router = APIRouter(prefix="/email", tags=["email"])
@@ -119,3 +119,31 @@ def send_email(body: SendEmailRequest, current_user: CurrentUserDep, db: Supabas
 @router.get("/logs/{contact_id}")
 def get_email_logs(contact_id: str, current_user: CurrentUserDep, db: SupabaseDep):
     return email_repo.get_email_logs_for_contact(db, contact_id)
+
+
+# ---------------------------------------------------------------------------
+# Email tracking
+# ---------------------------------------------------------------------------
+
+@router.post("/tracking/sync")
+def sync_tracked_emails(current_user: CurrentUserDep, db: SupabaseDep):
+    """Sync Gmail messages for all contacts the user has interacted with."""
+    try:
+        count = email_service.sync_emails_for_user(db, current_user["id"])
+        return {"synced": count}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Sync failed: {exc}")
+
+
+@router.get("/tracking")
+def get_tracked_contacts(current_user: CurrentUserDep, db: SupabaseDep):
+    """Return contacts with email tracking stats."""
+    return email_tracking_repo.get_tracked_contacts_summary(db, current_user["id"])
+
+
+@router.get("/tracking/{contact_id}")
+def get_tracked_thread(contact_id: str, current_user: CurrentUserDep, db: SupabaseDep):
+    """Return all tracked emails for a specific contact."""
+    return email_tracking_repo.get_tracked_thread(db, current_user["id"], contact_id)
