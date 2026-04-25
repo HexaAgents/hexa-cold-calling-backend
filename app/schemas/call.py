@@ -14,7 +14,7 @@ class CallLogCreate(BaseModel):
 
 class CallLogOut(BaseModel):
     id: str
-    contact_id: str
+    contact_id: str | None = None
     user_id: str
     call_date: str
     call_method: str
@@ -34,6 +34,6 @@ class CallLogResponse(BaseModel):
 
 
 class CallLogDeleteResponse(BaseModel):
-    contact_id: str
+    contact_id: str | None = None
     times_called: int = 0
     call_outcome: str | None = None
