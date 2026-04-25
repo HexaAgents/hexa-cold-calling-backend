@@ -63,9 +63,7 @@ class TestReleaseStaleClaimsCalledByRoutes:
     @patch("app.routers.calls.contact_repo")
     def test_my_queue_calls_release_stale(self, mock_repo, client, mock_supabase):
         mock_repo.release_stale_claims.return_value = 0
-        mock_supabase.table.return_value.select.return_value.eq.return_value \
-            .is_.return_value.neq.return_value.or_.return_value \
-            .order.return_value.execute.return_value = MagicMock(data=[])
+        mock_repo.get_user_queue.return_value = []
 
         client.get("/calls/my-queue")
 
