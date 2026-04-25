@@ -181,6 +181,8 @@ class TestMyQueue:
             .select.return_value \
             .eq.return_value \
             .is_.return_value \
+            .neq.return_value \
+            .or_.return_value \
             .order.return_value \
             .execute.return_value = _make_execute_result([SAMPLE_FULL_CONTACT])
 
@@ -195,6 +197,8 @@ class TestMyQueue:
             .select.return_value \
             .eq.return_value \
             .is_.return_value \
+            .neq.return_value \
+            .or_.return_value \
             .order.return_value \
             .execute.return_value = _make_execute_result([])
 
