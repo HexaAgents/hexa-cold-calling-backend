@@ -22,6 +22,8 @@ def list_contacts(
         sort_by = "created_at"
 
     query = db.table("contacts").select("*", count="exact")
+    query = query.neq("company_type", "rejected")
+    query = query.or_("hidden.is.null,hidden.eq.false")
 
     if outcome_filter:
         query = query.eq("call_outcome", outcome_filter)
@@ -97,59 +99,6 @@ def get_existing_scores(db: Client, websites: list[str]) -> dict[str, dict]:
             if w and w not in scores:
                 scores[w] = row
     return scores
-
-
-def get_user_queue(db: Client, user_id: str) -> list[dict]:
-    """Return contacts currently claimed by a user with no outcome logged."""
-    result = (
-        db.table("contacts")
-        .select("*")
-        .eq("assigned_to", user_id)
-        .is_("call_outcome", "null")
-        .neq("company_type", "rejected")
-        .or_("hidden.is.null,hidden.eq.false")
-        .order("score", desc=True)
-        .execute()
-    )
-    return result.data or []
-
-
-def get_interacted_contact_ids(db: Client, user_id: str) -> set[str]:
-    """Return contact IDs the user has called or emailed."""
-    call_contacts = (
-        db.table("call_logs")
-        .select("contact_id")
-        .eq("user_id", user_id)
-        .not_.is_("contact_id", "null")
-        .execute()
-    )
-    email_contacts = (
-        db.table("email_logs")
-        .select("contact_id")
-        .eq("user_id", user_id)
-        .not_.is_("contact_id", "null")
-        .execute()
-    )
-    ids: set[str] = set()
-    for row in (call_contacts.data or []):
-        ids.add(row["contact_id"])
-    for row in (email_contacts.data or []):
-        ids.add(row["contact_id"])
-    return ids
-
-
-def get_contacts_with_email(db: Client, contact_ids: list[str]) -> list[dict]:
-    """Return contacts by IDs that have an email address."""
-    if not contact_ids:
-        return []
-    result = (
-        db.table("contacts")
-        .select("id, email")
-        .in_("id", contact_ids)
-        .not_.is_("email", "null")
-        .execute()
-    )
-    return result.data or []
 
 
 def release_stale_claims(db: Client) -> int:
