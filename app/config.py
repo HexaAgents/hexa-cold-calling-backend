@@ -1,3 +1,5 @@
+import json
+
 from pydantic_settings import BaseSettings
 
 
@@ -12,6 +14,7 @@ class Settings(BaseSettings):
     twilio_twiml_app_sid: str = ""
     twilio_api_key_sid: str = ""
     twilio_api_key_secret: str = ""
+    twilio_phone_numbers_json: str = "{}"
     openai_model: str = "gpt-4o-mini"
     apollo_api_key: str = ""
     backend_public_url: str = ""
@@ -23,6 +26,17 @@ class Settings(BaseSettings):
     @property
     def cors_origins(self) -> list[str]:
         return [o.strip() for o in self.allowed_origins.split(",") if o.strip()]
+
+    @property
+    def twilio_phone_numbers(self) -> dict[str, str]:
+        """Country code -> Twilio phone number mapping. Falls back to default number for US."""
+        try:
+            numbers = json.loads(self.twilio_phone_numbers_json)
+        except (json.JSONDecodeError, TypeError):
+            numbers = {}
+        if "US" not in numbers and self.twilio_phone_number:
+            numbers["US"] = self.twilio_phone_number
+        return numbers
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
