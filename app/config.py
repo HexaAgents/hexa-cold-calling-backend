@@ -6,6 +6,8 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     supabase_url: str = ""
     supabase_service_role_key: str = ""
+    # Direct Postgres URI (Supabase → Project Settings → Database) for DDL scripts only.
+    database_url: str = ""
     openai_api_key: str = ""
     exa_api_key: str = ""
     twilio_account_sid: str = ""
