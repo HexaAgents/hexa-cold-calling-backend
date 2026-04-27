@@ -288,14 +288,40 @@ def sync_emails_for_contact(
 
 def sync_emails_for_user(db: Client, user_id: str) -> int:
     """Sync emails for all contacts the user has interacted with."""
-    contact_ids = contact_repo.get_interacted_contact_ids(db, user_id)
+    call_contacts = (
+        db.table("call_logs")
+        .select("contact_id")
+        .eq("user_id", user_id)
+        .not_.is_("contact_id", "null")
+        .execute()
+    )
+    email_contacts = (
+        db.table("email_logs")
+        .select("contact_id")
+        .eq("user_id", user_id)
+        .not_.is_("contact_id", "null")
+        .execute()
+    )
+
+    contact_ids = set()
+    for row in (call_contacts.data or []):
+        contact_ids.add(row["contact_id"])
+    for row in (email_contacts.data or []):
+        contact_ids.add(row["contact_id"])
+
     if not contact_ids:
         return 0
 
-    contacts = contact_repo.get_contacts_with_email(db, list(contact_ids))
+    contacts = (
+        db.table("contacts")
+        .select("id, email")
+        .in_("id", list(contact_ids))
+        .not_.is_("email", "null")
+        .execute()
+    )
 
     total = 0
-    for c in contacts:
+    for c in (contacts.data or []):
         if not c.get("email"):
             continue
         try:

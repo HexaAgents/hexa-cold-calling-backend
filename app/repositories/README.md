@@ -12,13 +12,11 @@ Each file maps to **one database table** (Single Responsibility). `contact_repo`
 
 | File | Table | Purpose |
 |---|---|---|
-| `contact_repo.py` | `contacts` | CRUD + filtered listing, score lookups, SMS due queries, user queue, stale claim release, interacted contacts |
+| `contact_repo.py` | `contacts` | CRUD + filtered listing, score lookups, SMS due queries |
 | `call_log_repo.py` | `call_logs` | Create logs, fetch per-contact history, same-day check |
 | `note_repo.py` | `notes` | CRUD for free-text notes linked to contacts |
 | `settings_repo.py` | `settings` | Read/update the single global settings row |
 | `import_batch_repo.py` | `import_batches` | Track CSV import jobs (create, update, recent list) |
-| `email_repo.py` | `user_gmail_tokens`, `email_logs` | Gmail OAuth token storage, email send logging |
-| `email_tracking_repo.py` | `tracked_emails` | Upsert synced Gmail messages, contact summaries with reply status, per-contact thread retrieval |
 
 ---
 

@@ -14,13 +14,7 @@ tests/
 │   ├── test_openai_scorer.py            # OpenAI response parsing
 │   ├── test_apollo_service.py           # Apollo enrichment helpers
 │   ├── test_apollo_webhook.py           # Apollo webhook payload handling
-│   ├── test_stale_recovery.py           # Stale import detection/recovery
-│   ├── test_stale_claims.py             # 10-hour claim auto-release + route integration
-│   ├── test_email_service.py            # Email OAuth, send, template, draft, token refresh
-│   ├── test_email_repo.py              # Gmail tokens + email logs CRUD
-│   ├── test_email_tracking_repo.py      # Tracked emails upsert, summary, thread
-│   ├── test_email_tracking_service.py   # Gmail sync, header parsing, user-level sync
-│   └── test_contact_schema.py           # ContactOut resilience (NULLs, extra columns)
+│   └── test_stale_recovery.py           # Stale import detection/recovery
 └── integration/
     ├── test_health.py                    # Health check endpoint
     ├── test_auth_routes.py               # Auth/me endpoints
@@ -32,9 +26,7 @@ tests/
     ├── test_sms_routes.py               # Send/schedule SMS
     ├── test_notes_routes.py             # Notes CRUD
     ├── test_apollo_routes.py            # Apollo enrichment + webhook
-    ├── test_productivity_routes.py      # Productivity aggregation
-    ├── test_email_routes.py             # Gmail OAuth, send, draft, logs endpoints
-    └── test_email_tracking_routes.py    # Email tracking sync, list, thread endpoints
+    └── test_productivity_routes.py      # Productivity aggregation
 ```
 
 Unit tests validate individual functions in complete isolation — every external dependency (Exa, OpenAI, Supabase) is replaced with a mock. Integration tests spin up a real FastAPI `TestClient` and make actual HTTP requests against the app, but still mock the database and authentication layers so no real credentials are needed.

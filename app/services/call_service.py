@@ -104,8 +104,6 @@ def log_call(
         and bool((contact or {}).get("email"))
     )
 
-    _try_email_sync(db, user_id, contact_id, contact)
-
     return {
         "call_log": call_log,
         "is_new_occasion": is_new_occasion,
@@ -115,18 +113,6 @@ def log_call(
         "times_called": times_called,
         "retry_at": retry_at_value,
     }
-
-
-def _try_email_sync(db: Client, user_id: str, contact_id: str, contact: dict | None) -> None:
-    """Best-effort sync of Gmail messages for the contact after a call is logged."""
-    email = (contact or {}).get("email")
-    if not email:
-        return
-    try:
-        from app.services.email_service import sync_emails_for_contact
-        sync_emails_for_contact(db, user_id, email, contact_id)
-    except Exception as exc:
-        logger.debug("Email tracking sync skipped for %s: %s", contact_id, exc)
 
 
 def delete_call_log(db: Client, call_id: str) -> dict:
