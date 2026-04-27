@@ -18,6 +18,7 @@ Usage (from repo root, with .env loaded):
 Options:
     --dry-run          Print contact / website counts and outcome histogram only.
     --skip-migrate     Do not run SQL migrations (rescore only).
+    --migrate-only     Run SQL migration(s) only; verify call_logs counts unchanged; exit.
     --migration PATH   SQL file to run (repeatable). Default: migrations/022_add_bad_number_outcome.sql
 """
 
@@ -158,6 +159,11 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="Only print stats and exit")
     parser.add_argument("--skip-migrate", action="store_true", help="Skip SQL migrations")
     parser.add_argument(
+        "--migrate-only",
+        action="store_true",
+        help="Run SQL migration(s) and exit (no rescoring; still checks call_logs counts unchanged)",
+    )
+    parser.add_argument(
         "--migration",
         action="append",
         type=Path,
@@ -180,6 +186,24 @@ def main() -> None:
 
     if args.dry_run:
         logger.info("Dry run — no migration or rescore.")
+        return
+
+    if args.migrate_only:
+        raw_paths = [Path(p) for p in args.migration] if args.migration else [DEFAULT_MIGRATION]
+        migration_paths = []
+        for p in raw_paths:
+            path = p if p.is_absolute() else ROOT / p
+            if not path.exists():
+                raise SystemExit(f"Migration file not found: {path}")
+            migration_paths.append(path)
+        db_url = (settings.database_url or os.environ.get("DATABASE_URL", "")).strip()
+        if not db_url:
+            raise SystemExit("database_url / DATABASE_URL required for --migrate-only")
+        _run_sql_files(migration_paths)
+        after_hist = _outcome_histogram(db)
+        logger.info("call_logs snapshot after migrate: %s", after_hist)
+        _assert_histogram_unchanged(before_hist, after_hist)
+        logger.info("Migrations applied; call_logs unchanged.")
         return
 
     raw_paths = [Path(p) for p in args.migration] if args.migration else [DEFAULT_MIGRATION]
