@@ -126,3 +126,87 @@ def get_contacts_needing_sms(db: Client) -> list[dict]:
         .execute()
     )
     return result.data or []
+
+
+_COMPANY_FIELDS = (
+    "company_name, website, company_linkedin_url, company_description,"
+    "employees, industry_tag, score, city, state, country, call_outcome"
+)
+
+
+def get_all_companies(db: Client, search: str | None = None) -> list[dict]:
+    """Return company summaries grouped by company_name from non-rejected contacts."""
+    query = (
+        db.table("contacts")
+        .select(_COMPANY_FIELDS)
+        .neq("company_type", "rejected")
+        .or_("hidden.is.null,hidden.eq.false")
+        .neq("company_name", "")
+    )
+    if search:
+        query = query.ilike("company_name", f"%{search}%")
+    result = query.execute()
+    rows = result.data or []
+    if not rows:
+        return []
+
+    groups: dict[str, dict] = {}
+    for row in rows:
+        name = row["company_name"]
+        if name not in groups:
+            groups[name] = {
+                "company_name": name,
+                "website": None,
+                "company_linkedin_url": None,
+                "company_description": None,
+                "employees": None,
+                "industry_tag": None,
+                "city": None,
+                "state": None,
+                "country": None,
+                "contact_count": 0,
+                "score_sum": 0,
+                "score_count": 0,
+            }
+        g = groups[name]
+        g["contact_count"] += 1
+        for field in ("website", "company_linkedin_url", "company_description",
+                      "employees", "industry_tag", "city", "state", "country"):
+            if not g[field] and row.get(field):
+                g[field] = row[field]
+        if row.get("score") is not None:
+            g["score_sum"] += row["score"]
+            g["score_count"] += 1
+
+    summaries = []
+    for g in groups.values():
+        avg = round(g["score_sum"] / g["score_count"]) if g["score_count"] else None
+        summaries.append({
+            "company_name": g["company_name"],
+            "website": g["website"],
+            "company_linkedin_url": g["company_linkedin_url"],
+            "company_description": g["company_description"],
+            "employees": g["employees"],
+            "industry_tag": g["industry_tag"],
+            "city": g["city"],
+            "state": g["state"],
+            "country": g["country"],
+            "contact_count": g["contact_count"],
+            "avg_score": avg,
+        })
+    summaries.sort(key=lambda s: s["contact_count"], reverse=True)
+    return summaries
+
+
+def get_contacts_by_company(db: Client, company_name: str) -> list[dict]:
+    """Return all non-rejected, non-hidden contacts for an exact company name."""
+    result = (
+        db.table("contacts")
+        .select("*")
+        .eq("company_name", company_name)
+        .neq("company_type", "rejected")
+        .or_("hidden.is.null,hidden.eq.false")
+        .order("score", desc=True)
+        .execute()
+    )
+    return result.data or []
