@@ -59,6 +59,20 @@ class TestParseResponse:
         result = _parse_response(_valid_json(rejection_reason="bad_value"))
         assert result["rejection_reason"] == "unclear"
 
+    def test_parse_distributor_facing_vendor_reason(self):
+        result = _parse_response(
+            _valid_json(rejection_reason="distributor_facing_vendor", company_type="rejected", score=15)
+        )
+        assert result["rejection_reason"] == "distributor_facing_vendor"
+        assert result["company_type"] == "rejected"
+
+    def test_parse_rejection_reason_forces_rejected_even_if_model_said_distributor(self):
+        result = _parse_response(
+            _valid_json(company_type="distributor", rejection_reason="distributor_facing_vendor", score=90)
+        )
+        assert result["company_type"] == "rejected"
+        assert result["rejection_reason"] == "distributor_facing_vendor"
+
     def test_parse_valid_rejection_none(self):
         result = _parse_response(_valid_json(rejection_reason=None))
         assert "rejection_reason" in result

@@ -73,7 +73,9 @@ def _get_page(client: Exa, url: str) -> str:
 
 def _search_fallback(client: Exa, company_name: str) -> str:
     try:
-        query = f"{company_name} industrial distributor supplier"
+        # Neutral query: avoid biasing retrieved snippets with "distributor" keywords
+        # (would confuse the model for vendors who sell *to* distributors).
+        query = f"{company_name} company about products customers"
         result = client.search_and_contents(
             query,
             type="auto",

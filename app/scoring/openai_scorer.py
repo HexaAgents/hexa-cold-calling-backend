@@ -21,7 +21,8 @@ VALID_COMPANY_TYPES = {"distributor", "rejected"}
 VALID_REJECTION_REASONS = {
     "non_industrial_distributor", "manufacturer", "manufacturers_rep",
     "fuel_distributor", "wholesaler", "service_provider", "consultancy",
-    "automation_company", "data_mismatch", "unclear", None,
+    "automation_company", "distributor_facing_vendor", "data_mismatch",
+    "unclear", None,
 }
 
 
@@ -94,6 +95,10 @@ def _parse_response(raw: str) -> dict:
     rejection_reason = data.get("rejection_reason")
     if rejection_reason not in VALID_REJECTION_REASONS:
         rejection_reason = "unclear"
+
+    # Any non-null rejection_reason means not a callable distributor lead.
+    if rejection_reason is not None:
+        company_type = "rejected"
 
     return {
         "score": score,
