@@ -13,6 +13,32 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/productivity", tags=["productivity"])
 
+# PostgREST/Supabase caps a single response at `max-rows` (default 1000). A
+# bare `.select().execute()` therefore silently truncates large result sets,
+# which is what made the productivity counters freeze at 1000 calls. We page
+# through with `.range()` until a page comes back smaller than the page size.
+_PAGE_SIZE = 1000
+
+
+def _fetch_call_logs_since(db, cutoff: str) -> list[dict]:
+    rows: list[dict] = []
+    start = 0
+    while True:
+        page = (
+            db.table("call_logs")
+            .select("user_id, call_date, outcome")
+            .gte("call_date", cutoff)
+            .range(start, start + _PAGE_SIZE - 1)
+            .execute()
+            .data
+            or []
+        )
+        rows.extend(page)
+        if len(page) < _PAGE_SIZE:
+            break
+        start += _PAGE_SIZE
+    return rows
+
 
 @router.get("", response_model=ProductivityResponse)
 def get_productivity(
@@ -33,18 +59,13 @@ def get_productivity(
         user_map[uid] = first_name
         users.append(ProductivityUser(id=uid, first_name=first_name))
 
-    result = (
-        db.table("call_logs")
-        .select("user_id, call_date, outcome")
-        .gte("call_date", cutoff)
-        .execute()
-    )
+    log_rows = _fetch_call_logs_since(db, cutoff)
 
     pivot: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     overall: dict[str, int] = defaultdict(int)
     per_user: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
 
-    for row in result.data or []:
+    for row in log_rows:
         d = row["call_date"]
         uid = row["user_id"]
         outcome = row.get("outcome") or "other"

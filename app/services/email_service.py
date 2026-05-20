@@ -286,28 +286,40 @@ def sync_emails_for_contact(
     return email_tracking_repo.upsert_tracked_emails(db, rows)
 
 
+_CONTACT_SCAN_PAGE = 1000
+
+
+def _collect_contact_ids(db: Client, table: str, user_id: str) -> set[str]:
+    # PostgREST caps responses at 1000 rows by default, so a single `.select()`
+    # silently misses contacts past the 1000th row for high-volume users. Page
+    # through with `.range()` until we hit a partial page.
+    ids: set[str] = set()
+    start = 0
+    while True:
+        page = (
+            db.table(table)
+            .select("contact_id")
+            .eq("user_id", user_id)
+            .not_.is_("contact_id", "null")
+            .range(start, start + _CONTACT_SCAN_PAGE - 1)
+            .execute()
+            .data
+            or []
+        )
+        for row in page:
+            cid = row.get("contact_id")
+            if cid:
+                ids.add(cid)
+        if len(page) < _CONTACT_SCAN_PAGE:
+            break
+        start += _CONTACT_SCAN_PAGE
+    return ids
+
+
 def sync_emails_for_user(db: Client, user_id: str) -> int:
     """Sync emails for all contacts the user has interacted with."""
-    call_contacts = (
-        db.table("call_logs")
-        .select("contact_id")
-        .eq("user_id", user_id)
-        .not_.is_("contact_id", "null")
-        .execute()
-    )
-    email_contacts = (
-        db.table("email_logs")
-        .select("contact_id")
-        .eq("user_id", user_id)
-        .not_.is_("contact_id", "null")
-        .execute()
-    )
-
-    contact_ids = set()
-    for row in (call_contacts.data or []):
-        contact_ids.add(row["contact_id"])
-    for row in (email_contacts.data or []):
-        contact_ids.add(row["contact_id"])
+    contact_ids = _collect_contact_ids(db, "call_logs", user_id)
+    contact_ids.update(_collect_contact_ids(db, "email_logs", user_id))
 
     if not contact_ids:
         return 0

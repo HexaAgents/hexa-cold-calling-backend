@@ -98,8 +98,11 @@ class TestSyncEmailsForUser:
         mock_sync_contact.return_value = 3
         db = MagicMock()
 
+        # Paginated scan over call_logs/email_logs uses
+        # `.eq().not_.is_().range().execute()`. A short first page (<page size)
+        # ends the loop after one round.
         db.table.return_value.select.return_value.eq.return_value \
-            .not_.is_.return_value.execute.return_value = MagicMock(
+            .not_.is_.return_value.range.return_value.execute.return_value = MagicMock(
                 data=[{"contact_id": "c-1"}, {"contact_id": "c-2"}]
             )
 
@@ -121,7 +124,7 @@ class TestSyncEmailsForUser:
 
         db = MagicMock()
         db.table.return_value.select.return_value.eq.return_value \
-            .not_.is_.return_value.execute.return_value = MagicMock(data=[])
+            .not_.is_.return_value.range.return_value.execute.return_value = MagicMock(data=[])
 
         total = sync_emails_for_user(db, "user-1")
 

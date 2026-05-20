@@ -14,10 +14,14 @@ def _user_row(uid, full_name, email="user@example.com"):
     return {"id": uid, "email": email, "raw_user_meta_data": {"full_name": full_name}}
 
 
-def _setup_users_and_logs(mock_supabase, users, logs):
-    """Configure mock for the RPC users call and the call_logs table query."""
+def _setup_users_and_logs(mock_supabase, users, logs, page_size=1000):
+    """Configure mock for the RPC users call and the paginated call_logs query.
+
+    The router pages through call_logs with ``.range(start, end)`` until a page
+    smaller than ``page_size`` is returned. We slice the provided ``logs`` list
+    into the same-size pages so any number of rows can be exercised.
+    """
     rpc_result = _make_execute_result(users)
-    logs_result = _make_execute_result(logs)
 
     def rpc_side_effect(name, *args, **kwargs):
         mock = MagicMock()
@@ -26,10 +30,23 @@ def _setup_users_and_logs(mock_supabase, users, logs):
         return mock
 
     mock_supabase.rpc.side_effect = rpc_side_effect
+
+    pages = []
+    for i in range(0, max(len(logs), 1), page_size):
+        pages.append(_make_execute_result(logs[i : i + page_size]))
+    if not logs:
+        pages = [_make_execute_result([])]
+    pages_iter = iter(pages)
+
+    def range_side_effect(start, end):
+        chained = MagicMock()
+        chained.execute.return_value = next(pages_iter, _make_execute_result([]))
+        return chained
+
     mock_supabase.table.return_value \
         .select.return_value \
         .gte.return_value \
-        .execute.return_value = logs_result
+        .range.side_effect = range_side_effect
 
 
 class TestProductivity:
@@ -101,3 +118,39 @@ class TestProductivity:
         resp = client.get("/productivity")
         assert resp.status_code == 200
         assert resp.json()["users"][0]["first_name"] == "alice@example.com"
+
+    def test_counts_more_than_one_page_of_logs(self, client, mock_supabase):
+        """Regression: PostgREST caps single responses at 1000 rows, so the
+        old un-paginated `.select()` froze the productivity counter at exactly
+        1000 calls. The router must now page through and return the true total.
+        """
+        # 1500 logs split across two users, all on the same date so we can
+        # easily assert per-user totals and the overall breakdown.
+        logs = []
+        for i in range(900):
+            logs.append({"user_id": "u1", "call_date": "2026-04-21", "outcome": "didnt_pick_up"})
+        for i in range(600):
+            logs.append({"user_id": "u2", "call_date": "2026-04-21", "outcome": "interested"})
+
+        _setup_users_and_logs(
+            mock_supabase,
+            [_user_row("u1", "Alice"), _user_row("u2", "Bob")],
+            logs,
+            page_size=1000,
+        )
+
+        resp = client.get("/productivity?days=30")
+        assert resp.status_code == 200
+        body = resp.json()
+
+        assert body["overall_breakdown"]["total"] == 1500
+        assert body["overall_breakdown"]["didnt_pick_up"] == 900
+        assert body["overall_breakdown"]["interested"] == 600
+
+        per_user = {u["user_id"]: u["breakdown"] for u in body["per_user_breakdown"]}
+        assert per_user["u1"]["total"] == 900
+        assert per_user["u2"]["total"] == 600
+
+        row = body["rows"][0]
+        assert row["counts"]["u1"] == 900
+        assert row["counts"]["u2"] == 600
