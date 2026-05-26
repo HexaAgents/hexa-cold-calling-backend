@@ -61,12 +61,22 @@ def process_csv_upload(
 
     Each batch of BATCH_SIZE rows is scored, inserted, and enriched before
     moving to the next batch so contacts become callable as fast as possible.
+
+    Once processing is done the kept-rows-only subset of the original CSV is
+    written back to the batch as ``filtered_csv`` (same headers and column
+    order as the upload) so users can download the cleaned file.
     """
     text = file_content.decode("utf-8-sig")
     reader = csv.DictReader(io.StringIO(text))
+    fieldnames = list(reader.fieldnames or [])
 
-    rows = [_map_row(row, reader.fieldnames or []) for row in reader]
-    rows = [r for r in rows if r.get("company_name")]
+    raw_rows = list(reader)
+    mapped_rows = [_map_row(row, fieldnames) for row in raw_rows]
+    # Drop rows missing company_name from both the mapped and raw lists in
+    # lock-step so the kept-rows index lines up with the original CSV row.
+    keep_indices = [i for i, m in enumerate(mapped_rows) if m.get("company_name")]
+    raw_rows = [raw_rows[i] for i in keep_indices]
+    rows = [mapped_rows[i] for i in keep_indices]
 
     import_batch_repo.update_batch(db, batch_id, {"total_rows": len(rows)})
 
@@ -79,9 +89,11 @@ def process_csv_upload(
     discarded = 0
     processed = 0
     enriched = 0
+    kept_raw_rows: list[dict[str, Any]] = []
 
     for i in range(0, len(rows), BATCH_SIZE):
         batch_rows = rows[i : i + BATCH_SIZE]
+        batch_raw_rows = raw_rows[i : i + BATCH_SIZE]
 
         to_score: dict[str, dict[str, str]] = {}
         for row in batch_rows:
@@ -100,7 +112,7 @@ def process_csv_upload(
             scored_cache.update(new_scores)
 
         contacts_to_insert: list[dict] = []
-        for row in batch_rows:
+        for raw_row, row in zip(batch_raw_rows, batch_rows):
             processed += 1
             website = row.get("website", "")
 
@@ -121,6 +133,12 @@ def process_csv_upload(
                     contact["enrichment_status"] = "pending_enrichment"
                 contacts_to_insert.append(contact)
                 stored += 1
+                # The filtered CSV mirrors what the user will see in the
+                # call tracker: rejected contacts (hidden=True) are dropped,
+                # everything else (including scoring failures, which the
+                # user still works through manually) is kept.
+                if not contact.get("hidden"):
+                    kept_raw_rows.append(raw_row)
             else:
                 discarded += 1
 
@@ -140,11 +158,28 @@ def process_csv_upload(
             "enriched_rows": enriched,
         })
 
-    final_update: dict = {"status": "completed"}
+    final_update: dict = {
+        "status": "completed",
+        "filtered_csv": _render_filtered_csv(fieldnames, kept_raw_rows),
+    }
     if not credits_available:
         final_update["enrichment_error"] = "Apollo credits exhausted"
     import_batch_repo.update_batch(db, batch_id, final_update)
     return batch_id
+
+
+def _render_filtered_csv(fieldnames: list[str], rows: list[dict[str, Any]]) -> str:
+    """Re-emit the kept rows with the original headers in original order.
+
+    Unknown extra keys on rows are dropped so the output schema exactly
+    matches the upload.
+    """
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({k: row.get(k, "") for k in fieldnames})
+    return buffer.getvalue()
 
 
 def _safe_insert_batch(db: Client, contacts: list[dict]) -> list[dict]:

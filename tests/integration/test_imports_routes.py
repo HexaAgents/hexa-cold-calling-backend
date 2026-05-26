@@ -57,28 +57,38 @@ class TestUploadCSV:
 
 
 class TestRecentImports:
-    def test_get_recent_imports(self, client, mock_supabase):
+    def test_get_recent_imports(self, client, mock_supabase, monkeypatch):
+        # Decouple from the chained-mock dance; the repo function is what
+        # the route actually depends on.
+        from app.routers import imports as imports_router
+
         second = {**SAMPLE_BATCH, "id": "batch-2", "filename": "second.csv"}
-        mock_supabase.table.return_value \
-            .select.return_value \
-            .order.return_value \
-            .limit.return_value \
-            .execute.return_value = _make_execute_result([SAMPLE_BATCH, second])
+        monkeypatch.setattr(
+            imports_router.import_batch_repo,
+            "get_recent_batches",
+            lambda db: [
+                {**SAMPLE_BATCH, "has_filtered_csv": True},
+                {**second, "has_filtered_csv": False},
+            ],
+        )
 
         resp = client.get("/imports/recent")
         assert resp.status_code == 200
-
         body = resp.json()
         assert len(body) == 2
         assert body[0]["id"] == "batch-1"
+        assert body[0]["has_filtered_csv"] is True
         assert body[1]["filename"] == "second.csv"
+        assert body[1]["has_filtered_csv"] is False
 
-    def test_get_recent_imports_empty(self, client, mock_supabase):
-        mock_supabase.table.return_value \
-            .select.return_value \
-            .order.return_value \
-            .limit.return_value \
-            .execute.return_value = _make_execute_result([])
+    def test_get_recent_imports_empty(self, client, mock_supabase, monkeypatch):
+        from app.routers import imports as imports_router
+
+        monkeypatch.setattr(
+            imports_router.import_batch_repo,
+            "get_recent_batches",
+            lambda db: [],
+        )
 
         resp = client.get("/imports/recent")
         assert resp.status_code == 200
@@ -142,3 +152,51 @@ class TestDeleteImportBatch:
         resp = client.delete("/imports/nonexistent")
         assert resp.status_code == 404
         assert resp.json()["detail"] == "Import batch not found"
+
+
+class TestDownloadFilteredCsv:
+    def test_download_returns_csv_with_attachment_name(
+        self, client, mock_supabase, monkeypatch,
+    ):
+        from app.routers import imports as imports_router
+
+        csv_text = "Company Name,Website\r\nACME Corp,https://acme.com\r\n"
+        monkeypatch.setattr(
+            imports_router.import_batch_repo,
+            "get_filtered_csv",
+            lambda db, batch_id: (csv_text, "leads.csv"),
+        )
+
+        resp = client.get("/imports/batch-1/filtered-csv")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/csv")
+        assert "leads.filtered.csv" in resp.headers["content-disposition"]
+        assert resp.text == csv_text
+
+    def test_download_missing_returns_404(self, client, mock_supabase, monkeypatch):
+        from app.routers import imports as imports_router
+
+        monkeypatch.setattr(
+            imports_router.import_batch_repo,
+            "get_filtered_csv",
+            lambda db, batch_id: None,
+        )
+
+        resp = client.get("/imports/batch-1/filtered-csv")
+        assert resp.status_code == 404
+        assert "not available" in resp.json()["detail"].lower()
+
+    def test_download_preserves_extension_when_no_csv_suffix(
+        self, client, mock_supabase, monkeypatch,
+    ):
+        from app.routers import imports as imports_router
+
+        monkeypatch.setattr(
+            imports_router.import_batch_repo,
+            "get_filtered_csv",
+            lambda db, batch_id: ("Company Name\r\nACME\r\n", "no_extension"),
+        )
+
+        resp = client.get("/imports/batch-1/filtered-csv")
+        assert resp.status_code == 200
+        assert "no_extension.filtered.csv" in resp.headers["content-disposition"]

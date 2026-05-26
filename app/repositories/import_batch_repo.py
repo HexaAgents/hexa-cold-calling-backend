@@ -9,6 +9,50 @@ logger = logging.getLogger(__name__)
 
 STALE_THRESHOLD_MINUTES = 10
 
+# Lightweight column list used by list/get queries. We deliberately omit
+# `filtered_csv` (potentially several MB) and instead surface a boolean via
+# `_with_csv_flag` so the API can advertise downloadability without
+# shipping the file payload on every poll.
+_LIGHT_COLUMNS = (
+    "id, user_id, filename, total_rows, processed_rows, stored_rows, "
+    "discarded_rows, enriched_rows, enrichment_error, status, created_at, "
+    "updated_at"
+)
+
+
+def _with_csv_flag(db: Client, batch: dict | None) -> dict | None:
+    if not batch:
+        return batch
+    batch["has_filtered_csv"] = _csv_present(db, batch["id"])
+    return batch
+
+
+def _attach_csv_flags(db: Client, batches: list[dict]) -> list[dict]:
+    if not batches:
+        return batches
+    ids = [b["id"] for b in batches]
+    result = (
+        db.table("import_batches")
+        .select("id, filtered_csv")
+        .in_("id", ids)
+        .execute()
+    )
+    presence = {r["id"]: bool(r.get("filtered_csv")) for r in (result.data or [])}
+    for b in batches:
+        b["has_filtered_csv"] = presence.get(b["id"], False)
+    return batches
+
+
+def _csv_present(db: Client, batch_id: str) -> bool:
+    result = (
+        db.table("import_batches")
+        .select("filtered_csv")
+        .eq("id", batch_id)
+        .single()
+        .execute()
+    )
+    return bool((result.data or {}).get("filtered_csv"))
+
 
 def create_batch(db: Client, data: dict) -> dict:
     result = db.table("import_batches").insert(data).execute()
@@ -26,19 +70,44 @@ def delete_batch(db: Client, batch_id: str) -> bool:
 
 
 def get_batch(db: Client, batch_id: str) -> dict | None:
-    result = db.table("import_batches").select("*").eq("id", batch_id).single().execute()
-    return result.data
+    result = (
+        db.table("import_batches")
+        .select(_LIGHT_COLUMNS)
+        .eq("id", batch_id)
+        .single()
+        .execute()
+    )
+    return _with_csv_flag(db, result.data)
 
 
 def get_recent_batches(db: Client, limit: int = 10) -> list[dict]:
     result = (
         db.table("import_batches")
-        .select("*")
+        .select(_LIGHT_COLUMNS)
         .order("created_at", desc=True)
         .limit(limit)
         .execute()
     )
-    return result.data or []
+    return _attach_csv_flags(db, result.data or [])
+
+
+def get_filtered_csv(db: Client, batch_id: str) -> tuple[str, str] | None:
+    """Return (csv_text, original_filename) for a batch, or None if no CSV
+    has been stored yet (e.g. processing failed before the writeback)."""
+    result = (
+        db.table("import_batches")
+        .select("filtered_csv, filename")
+        .eq("id", batch_id)
+        .single()
+        .execute()
+    )
+    row = result.data
+    if not row:
+        return None
+    csv_text = row.get("filtered_csv")
+    if not csv_text:
+        return None
+    return csv_text, row.get("filename") or "filtered.csv"
 
 
 def is_stale(batch: dict, stale_minutes: int = STALE_THRESHOLD_MINUTES) -> bool:

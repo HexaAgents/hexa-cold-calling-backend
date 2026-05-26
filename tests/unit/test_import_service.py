@@ -451,6 +451,84 @@ class TestStreamingScoring:
 # ---------------------------------------------------------------------------
 
 
+class TestFilteredCsv:
+    def test_filtered_csv_includes_only_kept_rows(self, _mock_deps):
+        """Filtered CSV mirrors the call tracker: rejected rows are dropped,
+        good rows survive, and the original headers and column order are
+        preserved exactly."""
+        from app.services.import_service import process_csv_upload
+
+        def _side_effect(**kwargs):
+            if kwargs["website"] == "https://good.com":
+                return _good_score(80)
+            return {
+                "score": 10,
+                "company_type": "rejected",
+                "rationale": "off-topic",
+                "rejection_reason": "off_topic",
+                "exa_scrape_success": True,
+                "scoring_failed": False,
+            }
+
+        _mock_deps["score_website"].side_effect = _side_effect
+        csv_data = _csv_bytes(
+            "Good Co,https://good.com",
+            "Bad Co,https://bad.com",
+        )
+        db = MagicMock()
+
+        process_csv_upload(db, csv_data, "test.csv", "user-1", "batch-1")
+
+        final = _mock_deps["update_batch"].call_args_list[-1][0][2]
+        assert final["status"] == "completed"
+        assert "filtered_csv" in final
+        lines = final["filtered_csv"].splitlines()
+        assert lines[0] == "Company Name,Website"
+        assert lines[1].startswith("Good Co,")
+        assert all("Bad Co" not in line for line in lines)
+        assert len(lines) == 2  # header + 1 kept row
+
+    def test_filtered_csv_preserves_unknown_columns(self, _mock_deps):
+        """Columns the importer doesn't map to DB fields still appear in the
+        filtered CSV so the file matches the upload exactly."""
+        from app.services.import_service import process_csv_upload
+
+        _mock_deps["score_website"].return_value = _good_score(80)
+        csv_data = _csv_bytes(
+            "ACME Corp,https://acme.com,Apollo-123,Special Tag",
+            headers="Company Name,Website,Apollo Id,Custom Tag",
+        )
+        db = MagicMock()
+
+        process_csv_upload(db, csv_data, "test.csv", "user-1", "batch-1")
+
+        final = _mock_deps["update_batch"].call_args_list[-1][0][2]
+        lines = final["filtered_csv"].splitlines()
+        assert lines[0] == "Company Name,Website,Apollo Id,Custom Tag"
+        assert lines[1] == "ACME Corp,https://acme.com,Apollo-123,Special Tag"
+
+    def test_filtered_csv_empty_when_all_rejected(self, _mock_deps):
+        """All rows rejected → CSV has just the header row."""
+        from app.services.import_service import process_csv_upload
+
+        _mock_deps["score_website"].return_value = {
+            "score": 5,
+            "company_type": "rejected",
+            "rationale": "off-topic",
+            "rejection_reason": "off_topic",
+            "exa_scrape_success": True,
+            "scoring_failed": False,
+        }
+        csv_data = _csv_bytes("Bad Co,https://bad.com")
+        db = MagicMock()
+
+        process_csv_upload(db, csv_data, "test.csv", "user-1", "batch-1")
+
+        final = _mock_deps["update_batch"].call_args_list[-1][0][2]
+        lines = final["filtered_csv"].splitlines()
+        assert lines == ["Company Name,Website"]
+
+
 class TestSafeInsertBatch:
     def test_batch_insert_fallback_to_individual(self, _mock_deps):
         """If batch insert fails, rows are retried individually."""

@@ -4,6 +4,7 @@ import csv
 import io
 
 from fastapi import APIRouter, HTTPException, UploadFile, BackgroundTasks
+from fastapi.responses import Response
 
 from app.dependencies import SupabaseDep, CurrentUserDep, get_supabase
 from app.schemas.import_batch import ImportBatchOut
@@ -11,6 +12,14 @@ from app.services import import_service
 from app.repositories import contact_repo, import_batch_repo
 
 router = APIRouter(prefix="/imports", tags=["imports"])
+
+
+def _filtered_download_filename(original: str) -> str:
+    """Turn ``leads.csv`` into ``leads.filtered.csv`` while leaving anything
+    that doesn't end in .csv alone (defensive — uploads are CSV-only)."""
+    if original.lower().endswith(".csv"):
+        return f"{original[:-4]}.filtered.csv"
+    return f"{original}.filtered.csv"
 
 
 def _run_import(batch_id: str, file_content: bytes, filename: str, user_id: str) -> None:
@@ -91,3 +100,28 @@ def delete_import_batch(batch_id: str, current_user: CurrentUserDep, db: Supabas
     deleted_count = contact_repo.delete_contacts_by_batch(db, batch_id)
     import_batch_repo.delete_batch(db, batch_id)
     return {"deleted_contacts": deleted_count, "batch_id": batch_id}
+
+
+@router.get("/{batch_id}/filtered-csv")
+def download_filtered_csv(
+    batch_id: str,
+    current_user: CurrentUserDep,
+    db: SupabaseDep,
+):
+    """Stream the post-filter copy of the imported CSV — same headers and
+    column order as the upload, only the rows that survived scoring."""
+    result = import_batch_repo.get_filtered_csv(db, batch_id)
+    if not result:
+        raise HTTPException(
+            status_code=404,
+            detail="Filtered CSV not available for this import",
+        )
+    csv_text, original_filename = result
+    download_name = _filtered_download_filename(original_filename)
+    return Response(
+        content=csv_text,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="{download_name}"',
+        },
+    )
