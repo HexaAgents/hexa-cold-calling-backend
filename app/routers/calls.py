@@ -113,6 +113,7 @@ def log_call(body: CallLogCreate, current_user: CurrentUserDep, db: SupabaseDep)
         occasion_count=result["occasion_count"],
         times_called=result["times_called"],
         retry_at=result["retry_at"],
+        contact_pending_deletion=result.get("contact_pending_deletion", False),
     )
 
 

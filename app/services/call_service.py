@@ -50,9 +50,16 @@ def log_call(
     outcome: str,
     callback_date: str | None = None,
 ) -> dict:
-    """Log a call and determine if SMS prompt is needed.
+    """Log a call and determine if SMS prompt / contact deletion is needed.
 
-    Returns {call_log, is_new_occasion, sms_prompt_needed, occasion_count}.
+    The `sms_call_threshold` setting is dual-purpose: it triggers the SMS
+    prompt once a contact has reached N call occasions, and it also marks
+    the contact for deletion once it has reached N "didn't pick up"
+    occasions — i.e. give up on the contact after N failed attempts.
+
+    Returns {call_log, is_new_occasion, sms_prompt_needed,
+    email_prompt_needed, occasion_count, times_called, retry_at,
+    contact_pending_deletion}.
     """
     already_called_today = call_log_repo.has_call_today(db, contact_id)
     is_new_occasion = not already_called_today
@@ -79,9 +86,17 @@ def log_call(
         update_data["call_occasion_count"] = occasion_count
 
     global_settings = settings_repo.get_settings(db)
+    threshold = global_settings.get("sms_call_threshold", 3)
+
+    # Once a contact has reached the threshold of "didn't pick up" occasions
+    # we give up on them — no point scheduling a retry, since the contact
+    # will be removed at the end of this call (after SMS, if any).
+    contact_pending_deletion = (
+        outcome == "didnt_pick_up" and occasion_count >= threshold
+    )
 
     retry_at_value: str | None = None
-    if outcome == "didnt_pick_up":
+    if outcome == "didnt_pick_up" and not contact_pending_deletion:
         if callback_date:
             retry_at_value = callback_date
         else:
@@ -95,7 +110,6 @@ def log_call(
 
     sms_prompt_needed = False
     if is_new_occasion and not (contact or {}).get("sms_sent", False):
-        threshold = global_settings.get("sms_call_threshold", 3)
         if occasion_count >= threshold:
             sms_prompt_needed = True
 
@@ -112,6 +126,7 @@ def log_call(
         "occasion_count": occasion_count,
         "times_called": times_called,
         "retry_at": retry_at_value,
+        "contact_pending_deletion": contact_pending_deletion,
     }
 
 

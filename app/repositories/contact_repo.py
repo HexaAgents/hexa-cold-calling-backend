@@ -76,6 +76,25 @@ def delete_contacts_by_batch(db: Client, batch_id: str) -> int:
     return len(result.data) if result.data else 0
 
 
+def delete_exhausted_didnt_pick_up_contacts(db: Client, threshold: int) -> int:
+    """Delete didn't-pick-up contacts that have hit the SMS/give-up threshold.
+
+    Used both at call-log time (single contact via delete_contact) and at
+    settings-update time, when lowering the threshold should retroactively
+    remove now-exhausted contacts from the queue and contact list.
+    """
+    if threshold <= 0:
+        return 0
+    result = (
+        db.table("contacts")
+        .delete()
+        .eq("call_outcome", "didnt_pick_up")
+        .gte("call_occasion_count", threshold)
+        .execute()
+    )
+    return len(result.data) if result.data else 0
+
+
 _SCORE_FIELDS = "website, score, company_type, rationale, rejection_reason, exa_scrape_success, company_description"
 _SCORE_QUERY_CHUNK = 50
 

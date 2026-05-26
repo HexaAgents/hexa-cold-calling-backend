@@ -311,6 +311,40 @@ class TestLogCallWithCallbackDate:
         self, mock_call_log_repo, mock_contact_repo, mock_settings_repo,
         client, mock_supabase,
     ):
+        # Threshold sits well above the contact's current call_occasion_count
+        # so the callback date should be honored rather than the contact
+        # being flagged for deletion.
+        log = {**SAMPLE_CALL_LOG, "outcome": "didnt_pick_up"}
+        mock_call_log_repo.has_call_today.return_value = False
+        mock_call_log_repo.create_call_log.return_value = log
+        mock_contact_repo.get_contact.return_value = SAMPLE_CONTACT
+        mock_contact_repo.update_contact.return_value = None
+        mock_settings_repo.get_settings.return_value = {
+            **SAMPLE_SETTINGS, "sms_call_threshold": 10,
+        }
+
+        resp = client.post("/calls/log", json={
+            "contact_id": "c-1",
+            "call_method": "browser",
+            "phone_number_called": "+491234567890",
+            "outcome": "didnt_pick_up",
+            "callback_date": "2026-06-15",
+        })
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["retry_at"] == "2026-06-15"
+        assert body["contact_pending_deletion"] is False
+
+    @patch("app.services.call_service.settings_repo")
+    @patch("app.services.call_service.contact_repo")
+    @patch("app.services.call_service.call_log_repo")
+    def test_log_call_didnt_pick_up_at_threshold_flags_deletion(
+        self, mock_call_log_repo, mock_contact_repo, mock_settings_repo,
+        client, mock_supabase,
+    ):
+        """Hitting the SMS threshold with a didnt_pick_up outcome should
+        clear retry_at and tell the frontend to delete the contact."""
         log = {**SAMPLE_CALL_LOG, "outcome": "didnt_pick_up"}
         mock_call_log_repo.has_call_today.return_value = False
         mock_call_log_repo.create_call_log.return_value = log
@@ -328,7 +362,8 @@ class TestLogCallWithCallbackDate:
 
         assert resp.status_code == 200
         body = resp.json()
-        assert body["retry_at"] == "2026-06-15"
+        assert body["contact_pending_deletion"] is True
+        assert body["retry_at"] is None
 
     @patch("app.services.call_service.settings_repo")
     @patch("app.services.call_service.contact_repo")
