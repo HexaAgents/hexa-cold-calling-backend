@@ -82,10 +82,12 @@ class TestUpdateSettings:
         assert resp.status_code == 200
         assert resp.json()["sms_call_threshold"] == 3
 
-    def test_lowering_threshold_purges_exhausted_contacts(self, client, mock_supabase, monkeypatch):
-        """Lowering sms_call_threshold should drop didnt_pick_up contacts that
-        now sit at or above the new limit. We just verify the repo helper is
-        called with the new value."""
+    def test_lowering_threshold_silences_exhausted_contacts(self, client, mock_supabase, monkeypatch):
+        """Lowering sms_call_threshold should silence didnt_pick_up contacts
+        that now sit at or above the new limit. They are kept in the
+        database but their retry_at is cleared so they drop out of the
+        call tracker queue. We just verify the repo helper is called with
+        the new value."""
         from app.routers import settings as settings_router
 
         updated = {**SAMPLE_SETTINGS, "sms_call_threshold": 2}
@@ -100,18 +102,18 @@ class TestUpdateSettings:
             .eq.return_value \
             .execute.return_value = _make_execute_result([updated])
 
-        purged = []
+        silenced = []
         monkeypatch.setattr(
             settings_router.contact_repo,
-            "delete_exhausted_didnt_pick_up_contacts",
-            lambda db, threshold: purged.append(threshold) or 1,
+            "silence_exhausted_didnt_pick_up_contacts",
+            lambda db, threshold: silenced.append(threshold) or 1,
         )
 
         resp = client.put("/settings", json={"sms_call_threshold": 2})
         assert resp.status_code == 200
-        assert purged == [2]
+        assert silenced == [2]
 
-    def test_unchanged_threshold_skips_purge(self, client, mock_supabase, monkeypatch):
+    def test_unchanged_threshold_skips_silence(self, client, mock_supabase, monkeypatch):
         from app.routers import settings as settings_router
 
         mock_supabase.table.return_value \
@@ -127,7 +129,7 @@ class TestUpdateSettings:
         called = []
         monkeypatch.setattr(
             settings_router.contact_repo,
-            "delete_exhausted_didnt_pick_up_contacts",
+            "silence_exhausted_didnt_pick_up_contacts",
             lambda db, threshold: called.append(threshold) or 0,
         )
 

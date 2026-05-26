@@ -190,9 +190,10 @@ class TestLogCall:
         assert update_data["retry_at"] is None
         assert result["retry_at"] is None
 
-    def test_didnt_pick_up_at_threshold_flags_deletion(self, _mock_repos):
-        """At the SMS threshold a didnt_pick_up outcome marks the contact
-        for deletion and skips scheduling a retry."""
+    def test_didnt_pick_up_at_threshold_silences_contact(self, _mock_repos):
+        """At the SMS threshold a didnt_pick_up outcome silences the contact:
+        retry_at is cleared so it drops out of the queue, but no delete is
+        performed and the contact row is otherwise left intact."""
         _mock_repos["has_call_today"].return_value = False
         _mock_repos["get_contact"].return_value = _contact(occasion_count=1)
         _mock_repos["get_settings"].return_value = {"sms_call_threshold": 2, "retry_days": 3}
@@ -200,10 +201,14 @@ class TestLogCall:
 
         result = _call_log_call(db, _mock_repos, outcome="didnt_pick_up")
 
-        assert result["contact_pending_deletion"] is True
+        assert result["contact_silenced"] is True
         assert result["retry_at"] is None
         update_data = _mock_repos["update_contact"].call_args[0][2]
         assert update_data["retry_at"] is None
+        # The contact should still be updated, not deleted — call_outcome
+        # must be persisted so the queue's structural filter (retry_at NULL
+        # + outcome != NULL) keeps the contact out of subsequent claims.
+        assert update_data["call_outcome"] == "didnt_pick_up"
 
     def test_didnt_pick_up_below_threshold_keeps_retry(self, _mock_repos):
         """Below threshold, didnt_pick_up still schedules a normal retry."""
@@ -216,12 +221,12 @@ class TestLogCall:
 
         result = _call_log_call(db, _mock_repos, outcome="didnt_pick_up")
 
-        assert result["contact_pending_deletion"] is False
+        assert result["contact_silenced"] is False
         expected = (date.today() + timedelta(days=4)).isoformat()
         assert result["retry_at"] == expected
 
-    def test_non_didnt_pick_up_at_threshold_does_not_delete(self, _mock_repos):
-        """Only didnt_pick_up triggers deletion at threshold; interested does not."""
+    def test_non_didnt_pick_up_at_threshold_does_not_silence(self, _mock_repos):
+        """Only didnt_pick_up triggers silencing at threshold; interested does not."""
         _mock_repos["has_call_today"].return_value = False
         _mock_repos["get_contact"].return_value = _contact(occasion_count=2)
         _mock_repos["get_settings"].return_value = {"sms_call_threshold": 3, "retry_days": 3}
@@ -229,4 +234,4 @@ class TestLogCall:
 
         result = _call_log_call(db, _mock_repos, outcome="interested")
 
-        assert result["contact_pending_deletion"] is False
+        assert result["contact_silenced"] is False

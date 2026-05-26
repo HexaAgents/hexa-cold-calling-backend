@@ -110,10 +110,11 @@ def log_call(body: CallLogCreate, current_user: CurrentUserDep, db: SupabaseDep)
     return CallLogResponse(
         call_log=CallLogOut(**result["call_log"]),
         sms_prompt_needed=result["sms_prompt_needed"],
+        email_prompt_needed=result.get("email_prompt_needed", False),
         occasion_count=result["occasion_count"],
         times_called=result["times_called"],
         retry_at=result["retry_at"],
-        contact_pending_deletion=result.get("contact_pending_deletion", False),
+        contact_silenced=result.get("contact_silenced", False),
     )
 
 

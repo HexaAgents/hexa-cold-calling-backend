@@ -36,20 +36,21 @@ def update_settings(body: SettingsUpdate, current_user: CurrentUserDep, db: Supa
         raise HTTPException(status_code=500, detail="Failed to update settings")
 
     # The SMS threshold doubles as the "give up after N failed pickups"
-    # threshold. Lowering it should retroactively clean out contacts that
+    # threshold. Lowering it should retroactively silence contacts that
     # are now over the limit so they stop reappearing in the call tracker.
+    # The contacts themselves are kept — only the retry_at is cleared.
     new_threshold = update_data.get("sms_call_threshold")
     if new_threshold is not None and new_threshold != current.get("sms_call_threshold"):
         try:
-            removed = contact_repo.delete_exhausted_didnt_pick_up_contacts(
+            silenced = contact_repo.silence_exhausted_didnt_pick_up_contacts(
                 db, new_threshold,
             )
-            if removed:
+            if silenced:
                 _log.info(
-                    "Removed %d didn't-pick-up contact(s) at or above new "
-                    "threshold of %d.", removed, new_threshold,
+                    "Silenced %d didn't-pick-up contact(s) at or above new "
+                    "threshold of %d.", silenced, new_threshold,
                 )
         except Exception as exc:
-            _log.warning("Failed to purge over-threshold contacts: %s", exc)
+            _log.warning("Failed to silence over-threshold contacts: %s", exc)
 
     return SettingsOut(**updated)

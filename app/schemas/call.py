@@ -31,7 +31,7 @@ class CallLogResponse(BaseModel):
     occasion_count: int = 0
     times_called: int = 0
     retry_at: str | None = None
-    contact_pending_deletion: bool = False
+    contact_silenced: bool = False
 
 
 class CallLogDeleteResponse(BaseModel):

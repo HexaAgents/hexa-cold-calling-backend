@@ -313,7 +313,7 @@ class TestLogCallWithCallbackDate:
     ):
         # Threshold sits well above the contact's current call_occasion_count
         # so the callback date should be honored rather than the contact
-        # being flagged for deletion.
+        # being silenced.
         log = {**SAMPLE_CALL_LOG, "outcome": "didnt_pick_up"}
         mock_call_log_repo.has_call_today.return_value = False
         mock_call_log_repo.create_call_log.return_value = log
@@ -334,17 +334,18 @@ class TestLogCallWithCallbackDate:
         assert resp.status_code == 200
         body = resp.json()
         assert body["retry_at"] == "2026-06-15"
-        assert body["contact_pending_deletion"] is False
+        assert body["contact_silenced"] is False
 
     @patch("app.services.call_service.settings_repo")
     @patch("app.services.call_service.contact_repo")
     @patch("app.services.call_service.call_log_repo")
-    def test_log_call_didnt_pick_up_at_threshold_flags_deletion(
+    def test_log_call_didnt_pick_up_at_threshold_silences_contact(
         self, mock_call_log_repo, mock_contact_repo, mock_settings_repo,
         client, mock_supabase,
     ):
         """Hitting the SMS threshold with a didnt_pick_up outcome should
-        clear retry_at and tell the frontend to delete the contact."""
+        clear retry_at and tell the frontend the contact has been silenced
+        (kept in the DB but parked out of the call tracker queue)."""
         log = {**SAMPLE_CALL_LOG, "outcome": "didnt_pick_up"}
         mock_call_log_repo.has_call_today.return_value = False
         mock_call_log_repo.create_call_log.return_value = log
@@ -362,8 +363,11 @@ class TestLogCallWithCallbackDate:
 
         assert resp.status_code == 200
         body = resp.json()
-        assert body["contact_pending_deletion"] is True
+        assert body["contact_silenced"] is True
         assert body["retry_at"] is None
+        # No DELETE on contacts should occur — only update_contact.
+        assert mock_contact_repo.update_contact.called
+        assert not mock_contact_repo.delete_contact.called
 
     @patch("app.services.call_service.settings_repo")
     @patch("app.services.call_service.contact_repo")

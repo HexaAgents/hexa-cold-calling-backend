@@ -76,20 +76,25 @@ def delete_contacts_by_batch(db: Client, batch_id: str) -> int:
     return len(result.data) if result.data else 0
 
 
-def delete_exhausted_didnt_pick_up_contacts(db: Client, threshold: int) -> int:
-    """Delete didn't-pick-up contacts that have hit the SMS/give-up threshold.
+def silence_exhausted_didnt_pick_up_contacts(db: Client, threshold: int) -> int:
+    """Silence didn't-pick-up contacts that have hit the give-up threshold.
 
-    Used both at call-log time (single contact via delete_contact) and at
-    settings-update time, when lowering the threshold should retroactively
-    remove now-exhausted contacts from the queue and contact list.
+    "Silencing" means clearing `retry_at` so they no longer match the retry
+    branch of `claim_next_contact` and drop out of the call tracker queue.
+    The contacts themselves remain in the database and contacts list — the
+    user just stops being prompted to call them again.
+
+    Called when the SMS / give-up threshold is lowered, to retroactively
+    quiet contacts that now sit at or above the new limit.
     """
     if threshold <= 0:
         return 0
     result = (
         db.table("contacts")
-        .delete()
+        .update({"retry_at": None})
         .eq("call_outcome", "didnt_pick_up")
         .gte("call_occasion_count", threshold)
+        .not_.is_("retry_at", "null")
         .execute()
     )
     return len(result.data) if result.data else 0
