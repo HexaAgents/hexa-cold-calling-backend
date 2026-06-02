@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.dependencies import get_supabase
 from app.repositories import import_batch_repo
-from app.routers import auth, contacts, companies, imports, calls, scheduled_calls, twilio_webhooks, sms, notes, settings as settings_router, apollo_webhooks, apollo_enrichment, productivity, email
+from app.routers import auth, contacts, companies, imports, calls, scheduled_calls, twilio_webhooks, sms, notes, settings as settings_router, apollo_webhooks, apollo_enrichment, productivity, email, todos
 from app.services import apollo_service
 from app.tasks.sms_scheduler import run_sms_scheduler
 
@@ -102,6 +102,7 @@ app.include_router(apollo_webhooks.router)
 app.include_router(apollo_enrichment.router)
 app.include_router(productivity.router)
 app.include_router(email.router)
+app.include_router(todos.router)
 
 
 @app.get("/health")

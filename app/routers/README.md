@@ -625,3 +625,6 @@ HTTP Request
 | `sms.py` | `/sms` | `POST /send`, `POST /schedule` | `sms_service` |
 | `notes.py` | *(none)* | `GET /contacts/{id}/notes`, `POST /contacts/{id}/notes`, `PATCH /notes/{id}`, `DELETE /notes/{id}` | `note_repo` |
 | `settings.py` | `/settings` | `GET /`, `PUT /` | `settings_repo` |
+| `todos.py` | `/todos` | `GET /`, `GET /assignees`, `GET /{id}`, `POST /`, `PATCH /{id}`, `DELETE /{id}` | `todo_repo` |
+
+> Note: this reference documents the original core routers. Additional routers also mounted in `app/main.py` (`companies`, `scheduled_calls`, `apollo_webhooks`, `apollo_enrichment`, `productivity`, `email`, `todos`) follow the same structural contract described above. The `todos` router is unique in enforcing per-row, assigner-only permissions directly in the router (it returns `403` unless `current_user["id"]` matches the task's `assigned_by_id`), since the to-do feature is intentionally standalone.

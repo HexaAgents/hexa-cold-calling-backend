@@ -126,3 +126,30 @@ Tracks the progress and result of a CSV import:
 - **`status: str`**: One of `"processing"`, `"completed"`, `"failed"`.
 
 The frontend polls `GET /imports/{id}/status` every 2 seconds during an import, using `processed_rows / total_rows` to render a progress bar.
+
+---
+
+## todo.py
+
+Schemas for the standalone team to-do list (`todos` table). The table has no foreign keys; assignee/creator are stored as plain UUIDs plus a denormalized first name.
+
+### `TodoCreate`
+
+Request body for `POST /todos`. Only `title` is required:
+
+- **`title: str`**: The task name (the only required field).
+- **`description: str | None`**: Optional longer detail. Hidden from the table; shown on the task detail page.
+- **`assigned_to_id` / `assigned_to_name: str | None`**: Optional assignee (UUID + first name).
+- **`due_date: str | None`**: Optional ISO date. Tasks without a due date sort last.
+
+### `TodoUpdate`
+
+Write model for `PATCH /todos/{id}` (edit / reassign / mark done). All fields optional. The extra `unassign: bool` flag distinguishes an explicit "clear the assignee" from "leave it unchanged". Only the task's assigner may apply updates (enforced in the router).
+
+### `TodoOut`
+
+Full read model returned by the list, detail, create, and update endpoints, including `assigned_by_id`/`assigned_by_name`, `is_done`, and timestamps.
+
+### `TodoAssignee`
+
+Minimal `{ id, first_name }` shape for `GET /todos/assignees`, which lists platform users available to assign (first names via the `get_auth_users()` RPC).

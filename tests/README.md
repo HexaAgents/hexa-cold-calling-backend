@@ -21,7 +21,8 @@ tests/
 │   ├── test_email_repo.py              # Gmail tokens + email logs CRUD
 │   ├── test_email_tracking_repo.py      # Tracked emails upsert, summary, thread
 │   ├── test_email_tracking_service.py   # Gmail sync, header parsing, user-level sync
-│   └── test_companies_repo.py           # Company grouping, search, contacts by company
+│   ├── test_companies_repo.py           # Company grouping, search, contacts by company
+│   └── test_todo_schema.py              # To-Do schemas: title-only create, optional fields
 └── integration/
     ├── test_health.py                    # Health check endpoint
     ├── test_auth_routes.py               # Auth/me endpoints
@@ -36,7 +37,8 @@ tests/
     ├── test_productivity_routes.py      # Productivity aggregation
     ├── test_email_routes.py             # Gmail OAuth, send, draft, logs endpoints
     ├── test_email_tracking_routes.py    # Email tracking sync, list, thread endpoints
-    └── test_companies_routes.py         # Companies list + detail endpoints
+    ├── test_companies_routes.py         # Companies list + detail endpoints
+    └── test_todos_routes.py             # To-Do CRUD, due-date ordering, assigner-only permissions, assignees
 ```
 
 Unit tests validate individual functions in complete isolation — every external dependency (Exa, OpenAI, Supabase) is replaced with a mock. Integration tests spin up a real FastAPI `TestClient` and make actual HTTP requests against the app, but still mock the database and authentication layers so no real credentials are needed.

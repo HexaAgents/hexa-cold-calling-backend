@@ -536,6 +536,9 @@ The `settings` router is aliased to `settings_router` to avoid shadowing the `se
 | `sms` | SMS conversations and message history |
 | `notes` | Per-contact notes |
 | `settings` | User-level application settings |
+| `todos` | Standalone team to-do list (see below) |
+
+> **To-Do List feature.** The `todos` router (`app/routers/todos.py`), schemas (`app/schemas/todo.py`), and repository (`app/repositories/todo_repo.py`) back a deliberately **standalone** task list defined in `migrations/026_todos.sql`. The `todos` table has **no foreign keys** to any other table (assignee/creator are plain UUIDs plus a denormalized first name), so it is fully decoupled from the rest of the platform. Endpoints: `GET /todos` (all tasks, ordered by closest due date with no-due-date tasks last), `GET /todos/assignees` (platform user first names via the `get_auth_users()` RPC), `GET /todos/{id}`, `POST /todos` (only `title` is required), `PATCH /todos/{id}`, and `DELETE /todos/{id}`. Mutations (edit, reassign, unassign, mark done, delete) are **assigner-only**: the router returns `403` unless `current_user["id"]` matches the task's `assigned_by_id`.
 
 ```python
 from app.tasks.sms_scheduler import run_sms_scheduler
