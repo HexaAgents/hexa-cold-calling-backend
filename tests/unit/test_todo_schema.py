@@ -19,6 +19,7 @@ class TestTodoCreate:
         assert todo.description is None
         assert todo.assigned_to_id is None
         assert todo.assigned_to_name is None
+        assert todo.assignees is None
         assert todo.due_date is None
 
     def test_all_fields(self):
@@ -31,6 +32,16 @@ class TestTodoCreate:
         )
         assert todo.description == "Detail"
         assert todo.assigned_to_name == "Ishaan"
+
+    def test_multiple_assignees(self):
+        todo = TodoCreate(
+            title="Shared task",
+            assignees=[
+                {"id": "u-1", "first_name": "Ishaan"},
+                {"id": "u-2", "first_name": "Srijan"},
+            ],
+        )
+        assert [a.first_name for a in todo.assignees] == ["Ishaan", "Srijan"]
 
     def test_title_required(self):
         with pytest.raises(ValidationError):
@@ -56,3 +67,4 @@ class TestTodoOut:
         out = TodoOut(id="t-1", title="Task", assigned_by_id="u-1")
         assert out.is_done is False
         assert out.assigned_to_name is None
+        assert out.assignees == []

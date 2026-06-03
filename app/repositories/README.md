@@ -19,7 +19,7 @@ Each file maps to **one database table** (Single Responsibility). `contact_repo`
 | `import_batch_repo.py` | `import_batches` | Track CSV import jobs (create, update, recent list) |
 | `email_repo.py` | `user_gmail_tokens`, `email_logs` | Gmail OAuth token storage, email send logging |
 | `email_tracking_repo.py` | `tracked_emails` | Upsert synced Gmail messages, contact summaries with reply status, per-contact thread retrieval |
-| `todo_repo.py` | `todos` | CRUD for the standalone team to-do list; lists ordered by closest due date (no-due-date last). No foreign keys to other tables. |
+| `todo_repo.py` | `todos`, `todo_assignees` | CRUD for the standalone team to-do list; lists unfinished tasks before finished tasks, orders each group by closest due date (no-due-date last), hydrates multi-assignee lists, and mirrors the first assignee into legacy columns during the transition. |
 
 ---
 

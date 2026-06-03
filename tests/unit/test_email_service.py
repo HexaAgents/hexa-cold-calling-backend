@@ -204,6 +204,27 @@ class TestGetValidAccessToken:
         assert token == "ya29.refreshed"
         mock_refresh.assert_called_once()
 
+    @patch("app.services.email_service.refresh_access_token")
+    @patch("app.services.email_service.email_repo")
+    def test_refresh_error_bubbles_without_overwriting_existing_tokens(self, mock_repo, mock_refresh):
+        from app.services.email_service import _get_valid_access_token
+
+        expired_tokens = {
+            **SAMPLE_TOKENS,
+            "token_expiry": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+        }
+        mock_repo.get_gmail_tokens.return_value = expired_tokens
+        mock_refresh.side_effect = httpx.HTTPStatusError(
+            "invalid_grant",
+            request=MagicMock(),
+            response=MagicMock(status_code=400),
+        )
+
+        with pytest.raises(httpx.HTTPStatusError):
+            _get_valid_access_token(MagicMock(), "user-1")
+
+        mock_repo.upsert_gmail_tokens.assert_not_called()
+
 
 class TestRenderTemplate:
     def test_all_variables(self):
@@ -367,3 +388,32 @@ class TestSendEmail:
 
         with pytest.raises(httpx.HTTPStatusError):
             send_email(db, "user-1", "contact-1", "Subj", "Body")
+
+
+class TestSendDirectEmail:
+    @patch("app.services.email_service.httpx.post")
+    @patch("app.services.email_service._get_valid_access_token")
+    def test_sends_direct_email_successfully(self, mock_get_token, mock_post):
+        from app.services.email_service import send_direct_email
+
+        mock_get_token.return_value = ("ya29.token", "sender@example.com")
+        mock_post.return_value = MagicMock(
+            json=lambda: {"id": "gmail-direct-1"},
+            raise_for_status=lambda: None,
+        )
+        db = MagicMock()
+
+        result = send_direct_email(db, "user-1", "recipient@example.com", "Task assigned", "Body text")
+
+        assert result["gmail_message_id"] == "gmail-direct-1"
+        mock_get_token.assert_called_once_with(db, "user-1")
+        mock_post.assert_called_once()
+        raw = mock_post.call_args.kwargs["json"]["raw"]
+        assert raw
+        assert mock_post.call_args.kwargs["headers"]["Authorization"] == "Bearer ya29.token"
+
+    def test_requires_recipient_email(self):
+        from app.services.email_service import send_direct_email
+
+        with pytest.raises(ValueError, match="Recipient email is required"):
+            send_direct_email(MagicMock(), "user-1", "", "Subject", "Body")

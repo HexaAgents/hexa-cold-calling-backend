@@ -39,6 +39,22 @@ class TestOAuthUrl:
         assert "accounts.google.com" in url
         assert "test-client-id" in url
 
+    @patch("app.routers.email.email_service.get_oauth_url")
+    @patch("app.routers.email.settings")
+    def test_uses_request_callback_url_when_public_backend_url_not_set(
+        self, mock_router_settings, mock_get_oauth_url, client, mock_supabase,
+    ):
+        mock_router_settings.backend_public_url = ""
+        mock_get_oauth_url.return_value = "https://accounts.google.com/mock"
+
+        resp = client.get("/email/oauth/url")
+
+        assert resp.status_code == 200
+        mock_get_oauth_url.assert_called_once()
+        user_id, redirect_uri = mock_get_oauth_url.call_args[0]
+        assert user_id == "test-user-id"
+        assert redirect_uri == "http://testserver/email/oauth/callback"
+
 
 # ---------------------------------------------------------------------------
 # OAuth Callback
@@ -73,6 +89,40 @@ class TestOAuthCallback:
 
         assert resp.status_code == 307
         assert "settings?gmail=connected" in resp.headers["location"]
+        upsert_payload = mock_supabase.table.return_value.upsert.call_args[0][0]
+        assert upsert_payload["user_id"] == "user-1"
+        assert upsert_payload["gmail_address"] == "user@gmail.com"
+        assert upsert_payload["access_token"] == "ya29.new"
+        assert upsert_payload["refresh_token"] == "1//rt"
+        assert upsert_payload["token_expiry"]
+
+    @patch("app.services.email_service.get_gmail_address")
+    @patch("app.services.email_service.exchange_code")
+    @patch("app.routers.email.settings")
+    def test_callback_stores_empty_refresh_token_when_google_omits_it(
+        self, mock_router_settings, mock_exchange, mock_gmail_addr,
+        client, mock_supabase,
+    ):
+        mock_router_settings.backend_public_url = "https://api.example.com"
+        mock_router_settings.frontend_url = "https://frontend.example.com"
+        mock_exchange.return_value = {
+            "access_token": "ya29.new",
+            "expires_in": 1800,
+        }
+        mock_gmail_addr.return_value = "user@gmail.com"
+        mock_supabase.table.return_value.upsert.return_value.execute.return_value = MagicMock(
+            data=[{"user_id": "user-1"}]
+        )
+
+        resp = client.get(
+            "/email/oauth/callback",
+            params={"code": "auth-code", "state": "user-1"},
+            follow_redirects=False,
+        )
+
+        assert resp.status_code == 307
+        upsert_payload = mock_supabase.table.return_value.upsert.call_args[0][0]
+        assert upsert_payload["refresh_token"] == ""
 
     @patch("app.services.email_service.exchange_code")
     @patch("app.routers.email.settings")
@@ -136,6 +186,11 @@ class TestOAuthDisconnect:
 
         assert resp.status_code == 200
         assert resp.json()["disconnected"] is True
+        mock_supabase.table.assert_called_with("user_gmail_tokens")
+        mock_supabase.table.return_value.delete.return_value.eq.assert_called_with(
+            "user_id",
+            "test-user-id",
+        )
 
 
 # ---------------------------------------------------------------------------

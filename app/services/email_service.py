@@ -199,6 +199,36 @@ def send_email(
     return {"email_log": log, "gmail_message_id": gmail_msg_id}
 
 
+def send_direct_email(
+    db: Client,
+    user_id: str,
+    recipient_email: str,
+    subject: str,
+    body: str,
+) -> dict:
+    """Send a plain email via the user's connected Gmail without contact logging."""
+    if not recipient_email:
+        raise ValueError("Recipient email is required")
+
+    access_token, gmail_address = _get_valid_access_token(db, user_id)
+
+    msg = MIMEText(body, "plain")
+    msg["To"] = recipient_email
+    msg["From"] = gmail_address
+    msg["Subject"] = subject
+
+    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+    resp = httpx.post(
+        GMAIL_SEND_URL,
+        headers={"Authorization": f"Bearer {access_token}"},
+        json={"raw": raw},
+    )
+    resp.raise_for_status()
+    gmail_msg_id = resp.json().get("id", "")
+    logger.info("Direct email sent to %s via %s, Gmail ID %s", recipient_email, gmail_address, gmail_msg_id)
+    return {"gmail_message_id": gmail_msg_id}
+
+
 # ---------------------------------------------------------------------------
 # Email tracking / sync
 # ---------------------------------------------------------------------------

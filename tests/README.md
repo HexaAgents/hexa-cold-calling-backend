@@ -22,7 +22,8 @@ tests/
 │   ├── test_email_tracking_repo.py      # Tracked emails upsert, summary, thread
 │   ├── test_email_tracking_service.py   # Gmail sync, header parsing, user-level sync
 │   ├── test_companies_repo.py           # Company grouping, search, contacts by company
-│   └── test_todo_schema.py              # To-Do schemas: title-only create, optional fields
+│   ├── test_todo_repo.py                # To-Do assignee normalization and legacy field mirroring
+│   └── test_todo_schema.py              # To-Do schemas: title-only create, optional fields, multi-assignees
 └── integration/
     ├── test_health.py                    # Health check endpoint
     ├── test_auth_routes.py               # Auth/me endpoints
@@ -38,10 +39,18 @@ tests/
     ├── test_email_routes.py             # Gmail OAuth, send, draft, logs endpoints
     ├── test_email_tracking_routes.py    # Email tracking sync, list, thread endpoints
     ├── test_companies_routes.py         # Companies list + detail endpoints
-    └── test_todos_routes.py             # To-Do CRUD, due-date ordering, assigner-only permissions, assignees
+    └── test_todos_routes.py             # To-Do CRUD, due-date ordering, multi-assignee permissions, notifications
 ```
 
 Unit tests validate individual functions in complete isolation — every external dependency (Exa, OpenAI, Supabase) is replaced with a mock. Integration tests spin up a real FastAPI `TestClient` and make actual HTTP requests against the app, but still mock the database and authentication layers so no real credentials are needed.
+
+## Coverage Principles
+
+- Add unit tests for pure functions, schema validation, service orchestration, and repository query/normalization behavior.
+- Add integration tests for HTTP status codes, response bodies, dependency override behavior, authorization rules, and request-to-repository payload contracts.
+- Mock external providers at the boundary where the app calls them: Supabase, OpenAI, Exa, Twilio, Apollo, and Gmail should never make network calls in tests.
+- For permission-sensitive features, test both allowed and rejected users. The to-do suite covers assigner-only delete, assigner/assignee edit access, legacy assignee fallback, and canonical multi-assignee access.
+- For background work, keep task helpers injectable or patch their provider calls so tests do not require real credentials or long-running workers.
 
 ---
 
@@ -283,4 +292,9 @@ python -m pytest tests/unit/ -v
 To run only integration tests:
 ```bash
 python -m pytest tests/integration/ -v
+```
+
+To run the focused to-do coverage:
+```bash
+python -m pytest tests/unit/test_todo_schema.py tests/unit/test_todo_repo.py tests/integration/test_todos_routes.py -q
 ```

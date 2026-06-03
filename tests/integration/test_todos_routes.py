@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 
 SAMPLE_TODO = {
@@ -67,11 +67,13 @@ class TestCreateTodo:
         )
         assert resp.status_code == 201
 
-        inserted = mock_supabase.table.return_value.insert.call_args[0][0]
+        inserted = mock_supabase.table.return_value.insert.call_args_list[0][0][0]
         assert inserted["description"] == "Internal-only detail"
         assert inserted["assigned_to_id"] == "u-2"
         assert inserted["assigned_to_name"] == "Srijan"
         assert inserted["due_date"] == "2026-02-01"
+        assignee_rows = mock_supabase.table.return_value.insert.call_args_list[1][0][0]
+        assert assignee_rows == [{"todo_id": "todo-1", "user_id": "u-2", "first_name": "Srijan"}]
 
     def test_create_without_description_but_with_assignee(self, client, mock_supabase):
         mock_supabase.table.return_value \
@@ -83,16 +85,94 @@ class TestCreateTodo:
             json={"title": "Quick task", "assigned_to_id": "u-3", "assigned_to_name": "Mann"},
         )
         assert resp.status_code == 201
-        inserted = mock_supabase.table.return_value.insert.call_args[0][0]
+        inserted = mock_supabase.table.return_value.insert.call_args_list[0][0][0]
         assert inserted["description"] is None
         assert inserted["assigned_to_name"] == "Mann"
+        assignee_rows = mock_supabase.table.return_value.insert.call_args_list[1][0][0]
+        assert assignee_rows == [{"todo_id": "todo-1", "user_id": "u-3", "first_name": "Mann"}]
+
+    def test_create_with_multiple_assignees(self, client, mock_supabase):
+        mock_supabase.table.return_value \
+            .insert.return_value \
+            .execute.return_value = _result([SAMPLE_TODO])
+
+        resp = client.post(
+            "/todos",
+            json={
+                "title": "Shared task",
+                "assignees": [
+                    {"id": "u-1", "first_name": "Ishaan"},
+                    {"id": "u-2", "first_name": "Srijan"},
+                ],
+            },
+        )
+        assert resp.status_code == 201
+        body = resp.json()
+        assert body["assignees"] == [
+            {"id": "u-1", "first_name": "Ishaan"},
+            {"id": "u-2", "first_name": "Srijan"},
+        ]
+        inserted = mock_supabase.table.return_value.insert.call_args_list[0][0][0]
+        assert inserted["assigned_to_id"] == "u-1"
+        assignee_rows = mock_supabase.table.return_value.insert.call_args_list[1][0][0]
+        assert assignee_rows == [
+            {"todo_id": "todo-1", "user_id": "u-1", "first_name": "Ishaan"},
+            {"todo_id": "todo-1", "user_id": "u-2", "first_name": "Srijan"},
+        ]
+
+    def test_create_dedupes_repeated_assignees_by_id(self, client, mock_supabase):
+        mock_supabase.table.return_value \
+            .insert.return_value \
+            .execute.return_value = _result([SAMPLE_TODO])
+
+        resp = client.post(
+            "/todos",
+            json={
+                "title": "Deduped task",
+                "assignees": [
+                    {"id": "u-1", "first_name": "Ishaan"},
+                    {"id": "u-1", "first_name": "Ishaan"},
+                ],
+            },
+        )
+
+        assert resp.status_code == 201
+        assert resp.json()["assignees"] == [{"id": "u-1", "first_name": "Ishaan"}]
+        assignee_rows = mock_supabase.table.return_value.insert.call_args_list[1][0][0]
+        assert assignee_rows == [{"todo_id": "todo-1", "user_id": "u-1", "first_name": "Ishaan"}]
+
+    @patch("app.routers.todos.email_service.send_direct_email")
+    def test_create_notifies_new_assignees_by_email(self, mock_send_email, client, mock_supabase):
+        mock_supabase.table.return_value \
+            .insert.return_value \
+            .execute.return_value = _result([{**SAMPLE_TODO, "id": "todo-1", "title": "Email Srijan"}])
+        mock_supabase.rpc.return_value.execute.return_value = _result([
+            {"id": "u-2", "email": "srijan@example.com", "raw_user_meta_data": {"full_name": "Srijan Tandon"}},
+        ])
+
+        resp = client.post(
+            "/todos",
+            json={
+                "title": "Email Srijan",
+                "assignees": [{"id": "u-2", "first_name": "Srijan"}],
+            },
+        )
+
+        assert resp.status_code == 201
+        mock_send_email.assert_called_once()
+        args = mock_send_email.call_args[0]
+        assert args[1] == "test-user-id"
+        assert args[2] == "srijan@example.com"
+        assert "Email Srijan" in args[3]
+        assert "/todo-list/todo-1" in args[4]
 
 
 class TestListTodos:
-    def test_list_orders_by_due_date_nulls_last(self, client, mock_supabase):
+    def test_list_orders_open_tasks_first_then_due_date_nulls_last(self, client, mock_supabase):
         no_due = {**SAMPLE_TODO, "id": "todo-2", "due_date": None}
         mock_supabase.table.return_value \
             .select.return_value \
+            .order.return_value \
             .order.return_value \
             .order.return_value \
             .execute.return_value = _result([SAMPLE_TODO, no_due])
@@ -100,8 +180,11 @@ class TestListTodos:
         resp = client.get("/todos")
         assert resp.status_code == 200
         assert len(resp.json()) == 2
-        # Ordering is delegated to Postgres: closest due dates first, nulls last.
+        # Ordering is delegated to Postgres: open tasks first, then closest due dates.
         mock_supabase.table.return_value.select.return_value.order.assert_any_call(
+            "is_done", desc=False
+        )
+        mock_supabase.table.return_value.select.return_value.order.return_value.order.assert_any_call(
             "due_date", desc=False, nullsfirst=False
         )
 
@@ -170,6 +253,39 @@ class TestPermissions:
         assert updated["assigned_to_id"] == "u-9"
         assert updated["assigned_to_name"] == "Aurideep"
 
+    @patch("app.routers.todos.email_service.send_direct_email")
+    def test_reassign_notifies_only_new_assignees(self, mock_send_email, client, mock_supabase):
+        _set_get_todo(mock_supabase, {
+            **SAMPLE_TODO,
+            "assigned_by_id": "test-user-id",
+            "assigned_to_id": "u-1",
+            "assigned_to_name": "Ishaan",
+        })
+        mock_supabase.table.return_value \
+            .update.return_value \
+            .eq.return_value \
+            .execute.return_value = _result([{**SAMPLE_TODO, "title": "Shared follow-up"}])
+        mock_supabase.rpc.return_value.execute.return_value = _result([
+            {"id": "u-1", "email": "ishaan@example.com", "raw_user_meta_data": {"full_name": "Ishaan Shah"}},
+            {"id": "u-2", "email": "srijan@example.com", "raw_user_meta_data": {"full_name": "Srijan Tandon"}},
+        ])
+
+        resp = client.patch(
+            "/todos/todo-1",
+            json={
+                "assignees": [
+                    {"id": "u-1", "first_name": "Ishaan"},
+                    {"id": "u-2", "first_name": "Srijan"},
+                ],
+            },
+        )
+
+        assert resp.status_code == 200
+        mock_send_email.assert_called_once()
+        args = mock_send_email.call_args[0]
+        assert args[2] == "srijan@example.com"
+        assert "ishaan@example.com" not in args
+
     def test_unassign_clears_assignee(self, client, mock_supabase):
         _set_get_todo(mock_supabase, {**SAMPLE_TODO, "assigned_by_id": "test-user-id", "assigned_to_id": "u-9"})
         mock_supabase.table.return_value \
@@ -215,23 +331,64 @@ class TestPermissions:
         updated = mock_supabase.table.return_value.update.call_args[0][0]
         assert updated["is_done"] is True
 
-    def test_assignee_cannot_edit_other_fields(self, client, mock_supabase):
+    def test_assignee_can_edit_their_task(self, client, mock_supabase):
         _set_get_todo(mock_supabase, {
             **SAMPLE_TODO,
             "assigned_by_id": "someone-else",
             "assigned_to_id": "test-user-id",
         })
-        resp = client.patch("/todos/todo-1", json={"title": "Sneaky rename"})
-        assert resp.status_code == 403
+        mock_supabase.table.return_value \
+            .update.return_value \
+            .eq.return_value \
+            .execute.return_value = _result([{**SAMPLE_TODO, "title": "Assigned rename"}])
 
-    def test_assignee_cannot_unassign(self, client, mock_supabase):
+        resp = client.patch("/todos/todo-1", json={"title": "Assigned rename"})
+        assert resp.status_code == 200
+        assert resp.json()["title"] == "Assigned rename"
+        updated = mock_supabase.table.return_value.update.call_args[0][0]
+        assert updated["title"] == "Assigned rename"
+
+    def test_multi_assignee_can_edit_even_when_not_legacy_first_assignee(self, client, mock_supabase):
+        _set_get_todo(mock_supabase, {
+            **SAMPLE_TODO,
+            "assigned_by_id": "someone-else",
+            "assigned_to_id": "u-first",
+            "assigned_to_name": "Ishaan",
+        })
+        mock_supabase.table.return_value \
+            .select.return_value \
+            .in_.return_value \
+            .execute.return_value = _result([
+                {"todo_id": "todo-1", "user_id": "u-first", "first_name": "Ishaan"},
+                {"todo_id": "todo-1", "user_id": "test-user-id", "first_name": "Test"},
+            ])
+        mock_supabase.table.return_value \
+            .update.return_value \
+            .eq.return_value \
+            .execute.return_value = _result([{**SAMPLE_TODO, "title": "Shared rename"}])
+
+        resp = client.patch("/todos/todo-1", json={"title": "Shared rename"})
+
+        assert resp.status_code == 200
+        assert resp.json()["title"] == "Shared rename"
+        updated = mock_supabase.table.return_value.update.call_args[0][0]
+        assert updated["title"] == "Shared rename"
+
+    def test_assignee_can_unassign_their_task(self, client, mock_supabase):
         _set_get_todo(mock_supabase, {
             **SAMPLE_TODO,
             "assigned_by_id": "someone-else",
             "assigned_to_id": "test-user-id",
         })
+        mock_supabase.table.return_value \
+            .update.return_value \
+            .eq.return_value \
+            .execute.return_value = _result([{**SAMPLE_TODO, "assigned_to_id": None, "assigned_to_name": None}])
+
         resp = client.patch("/todos/todo-1", json={"unassign": True})
-        assert resp.status_code == 403
+        assert resp.status_code == 200
+        updated = mock_supabase.table.return_value.update.call_args[0][0]
+        assert updated["assigned_to_id"] is None
 
 
 class TestAssignees:

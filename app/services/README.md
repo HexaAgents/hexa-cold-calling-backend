@@ -9,7 +9,7 @@ Router  →  Service  →  Repository  →  Supabase
 
 Routers never import repositories directly. Every database interaction flows through a service function, which may orchestrate multiple repository calls, call external APIs, enforce validation rules, or combine results before returning them to the router.
 
-There are **5 service modules**, each owning a single domain:
+There are **6 service modules**, each owning a single domain:
 
 | Module | Domain | External Dependencies |
 |---|---|---|
@@ -18,6 +18,7 @@ There are **5 service modules**, each owning a single domain:
 | `call_service.py` | Twilio voice calls and call logging | Twilio SDK |
 | `sms_service.py` | SMS sending, scheduling, and background dispatch | Twilio SDK |
 | `contact_service.py` | Contact CRUD delegation | None (pure delegation) |
+| `email_service.py` | Gmail OAuth, contact email sending, tracking sync, and direct internal notifications | Gmail API |
 
 ---
 

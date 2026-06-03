@@ -1,6 +1,6 @@
 # Routers — API Endpoint Layer
 
-This directory contains the 8 FastAPI router modules that define every HTTP endpoint in the Hexa Cold-Calling backend. Routers are the **thinnest possible layer** between an incoming HTTP request and the service/repository that fulfils it.
+This directory contains the FastAPI router modules that define every HTTP endpoint in the Hexa Cold-Calling backend. Routers are the **thinnest possible layer** between an incoming HTTP request and the service/repository that fulfils it.
 
 ---
 
@@ -594,6 +594,51 @@ Line-by-line:
 
 ---
 
+### 9. `todos.py` — Team To-Do List
+
+```
+APIRouter(prefix="/todos", tags=["todos"])
+```
+
+Manages the standalone team to-do list. This router intentionally contains the feature's row-level permission checks because to-do ownership depends on both the assigner and a task's canonical multi-assignee list.
+
+#### Schemas Used
+
+| Schema | Source | Purpose |
+|---|---|---|
+| `TodoCreate` | `app.schemas.todo` | Create payload. `title` is required; description, due date, and assignees are optional. |
+| `TodoUpdate` | `app.schemas.todo` | Partial update payload. Supports details, due date, done state, replacing `assignees`, and explicit `unassign`. |
+| `TodoOut` | `app.schemas.todo` | Full task response with canonical `assignees`, legacy first-assignee mirror fields, creator metadata, done state, and timestamps. |
+| `TodoAssignee` | `app.schemas.todo` | Minimal `{ id, first_name }` user shape for assignee selection. |
+
+#### Endpoints
+
+##### `GET /todos`
+
+Returns all tasks ordered by unfinished first, then closest due date within each done/undone group, with null due dates last. The repository hydrates `assignees` from `todo_assignees` and falls back to legacy `assigned_to_id` / `assigned_to_name` when needed.
+
+##### `GET /todos/assignees`
+
+Returns platform users from the `get_auth_users` RPC as first-name-only assignee options.
+
+##### `GET /todos/{todo_id}`
+
+Returns a single task or 404 if it does not exist.
+
+##### `POST /todos`
+
+Creates a task assigned by the current user. The router accepts either canonical `assignees` or legacy `assigned_to_id` / `assigned_to_name`, dedupes assignees by id, mirrors the first assignee into legacy columns, and sends best-effort email notifications to newly assigned users.
+
+##### `PATCH /todos/{todo_id}`
+
+Updates task details, done state, due date, or assignees. The assigner and any assigned user may update a task. Unknown users receive 403. Empty patches return the existing task unchanged.
+
+##### `DELETE /todos/{todo_id}`
+
+Deletes a task. Only the original assigner may delete; assigned users may edit/mark done but cannot delete.
+
+---
+
 ## Dependency Injection Flow
 
 Every authenticated request follows this dependency chain:
@@ -625,6 +670,6 @@ HTTP Request
 | `sms.py` | `/sms` | `POST /send`, `POST /schedule` | `sms_service` |
 | `notes.py` | *(none)* | `GET /contacts/{id}/notes`, `POST /contacts/{id}/notes`, `PATCH /notes/{id}`, `DELETE /notes/{id}` | `note_repo` |
 | `settings.py` | `/settings` | `GET /`, `PUT /` | `settings_repo` |
-| `todos.py` | `/todos` | `GET /`, `GET /assignees`, `GET /{id}`, `POST /`, `PATCH /{id}`, `DELETE /{id}` | `todo_repo` |
+| `todos.py` | `/todos` | `GET /`, `GET /assignees`, `GET /{id}`, `POST /`, `PATCH /{id}`, `DELETE /{id}` | `todo_repo`, `email_service` for assignment notifications |
 
-> Note: this reference documents the original core routers. Additional routers also mounted in `app/main.py` (`companies`, `scheduled_calls`, `apollo_webhooks`, `apollo_enrichment`, `productivity`, `email`, `todos`) follow the same structural contract described above. The `todos` router is unique in enforcing per-row, assigner-only permissions directly in the router (it returns `403` unless `current_user["id"]` matches the task's `assigned_by_id`), since the to-do feature is intentionally standalone.
+> Additional routers mounted in `app/main.py` (`companies`, `scheduled_calls`, `apollo_webhooks`, `apollo_enrichment`, `productivity`, and `email`) follow the same structural contract described above. Keep this quick reference current when adding endpoints so the API surface can be audited from one place.
