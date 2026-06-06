@@ -147,24 +147,60 @@ class TestCreateTodo:
             .insert.return_value \
             .execute.return_value = _result([{**SAMPLE_TODO, "id": "todo-1", "title": "Email Srijan"}])
         mock_supabase.rpc.return_value.execute.return_value = _result([
-            {"id": "u-2", "email": "srijan@example.com", "raw_user_meta_data": {"full_name": "Srijan Tandon"}},
+            {"id": "u-2", "email": "assignee@example.com", "raw_user_meta_data": {"full_name": "Assignee Person"}},
         ])
+        # Shared sender resolved by Gmail address from user_gmail_tokens.
+        mock_supabase.table.return_value \
+            .select.return_value \
+            .eq.return_value \
+            .maybe_single.return_value \
+            .execute.return_value = _result({"user_id": "sender-1", "gmail_address": "admin@hexaagents.com"})
 
         resp = client.post(
             "/todos",
             json={
                 "title": "Email Srijan",
-                "assignees": [{"id": "u-2", "first_name": "Srijan"}],
+                "assignees": [{"id": "u-2", "first_name": "Assignee"}],
             },
         )
 
         assert resp.status_code == 201
         mock_send_email.assert_called_once()
         args = mock_send_email.call_args[0]
-        assert args[1] == "test-user-id"
-        assert args[2] == "srijan@example.com"
+        # Sent FROM the shared notification sender, not the actor.
+        assert args[1] == "sender-1"
+        assert args[2] == "assignee@example.com"
         assert "Email Srijan" in args[3]
         assert "/todo-list/todo-1" in args[4]
+
+    @patch("app.routers.todos.email_service.send_direct_email")
+    def test_self_assignment_still_notifies(self, mock_send_email, client, mock_supabase):
+        # The assigner (test-user-id) assigns the task to themselves.
+        mock_supabase.table.return_value \
+            .insert.return_value \
+            .execute.return_value = _result([{**SAMPLE_TODO, "id": "todo-1", "title": "My own task"}])
+        mock_supabase.rpc.return_value.execute.return_value = _result([
+            {"id": "test-user-id", "email": "test@hexaagents.com", "raw_user_meta_data": {"full_name": "Test User"}},
+        ])
+        mock_supabase.table.return_value \
+            .select.return_value \
+            .eq.return_value \
+            .maybe_single.return_value \
+            .execute.return_value = _result({"user_id": "sender-1", "gmail_address": "admin@hexaagents.com"})
+
+        resp = client.post(
+            "/todos",
+            json={
+                "title": "My own task",
+                "assignees": [{"id": "test-user-id", "first_name": "Test"}],
+            },
+        )
+
+        assert resp.status_code == 201
+        mock_send_email.assert_called_once()
+        args = mock_send_email.call_args[0]
+        assert args[1] == "sender-1"
+        assert args[2] == "test@hexaagents.com"
 
 
 class TestListTodos:
@@ -267,15 +303,21 @@ class TestPermissions:
             .execute.return_value = _result([{**SAMPLE_TODO, "title": "Shared follow-up"}])
         mock_supabase.rpc.return_value.execute.return_value = _result([
             {"id": "u-1", "email": "ishaan@example.com", "raw_user_meta_data": {"full_name": "Ishaan Shah"}},
-            {"id": "u-2", "email": "srijan@example.com", "raw_user_meta_data": {"full_name": "Srijan Tandon"}},
+            {"id": "u-2", "email": "newbie@example.com", "raw_user_meta_data": {"full_name": "New Assignee"}},
         ])
+        # Shared sender resolved by Gmail address from user_gmail_tokens.
+        mock_supabase.table.return_value \
+            .select.return_value \
+            .eq.return_value \
+            .maybe_single.return_value \
+            .execute.return_value = _result({"user_id": "sender-1", "gmail_address": "admin@hexaagents.com"})
 
         resp = client.patch(
             "/todos/todo-1",
             json={
                 "assignees": [
                     {"id": "u-1", "first_name": "Ishaan"},
-                    {"id": "u-2", "first_name": "Srijan"},
+                    {"id": "u-2", "first_name": "Newbie"},
                 ],
             },
         )
@@ -283,7 +325,10 @@ class TestPermissions:
         assert resp.status_code == 200
         mock_send_email.assert_called_once()
         args = mock_send_email.call_args[0]
-        assert args[2] == "srijan@example.com"
+        # Always sent FROM the shared notification sender, regardless of actor.
+        assert args[1] == "sender-1"
+        # TO the newly added assignee only (not the pre-existing one).
+        assert args[2] == "newbie@example.com"
         assert "ishaan@example.com" not in args
 
     def test_unassign_clears_assignee(self, client, mock_supabase):

@@ -14,6 +14,17 @@ def get_gmail_tokens(db: Client, user_id: str) -> dict | None:
     return result.data
 
 
+def get_gmail_tokens_by_address(db: Client, gmail_address: str) -> dict | None:
+    result = (
+        db.table("user_gmail_tokens")
+        .select("*")
+        .eq("gmail_address", gmail_address)
+        .maybe_single()
+        .execute()
+    )
+    return result.data if result else None
+
+
 def upsert_gmail_tokens(db: Client, user_id: str, data: dict) -> dict:
     payload = {"user_id": user_id, **data, "updated_at": "now()"}
     result = (

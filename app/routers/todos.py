@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException
 from app.config import settings
 from app.dependencies import SupabaseDep, CurrentUserDep
 from app.schemas.todo import TodoCreate, TodoUpdate, TodoOut, TodoAssignee
-from app.repositories import todo_repo
+from app.repositories import todo_repo, email_repo
 from app.services import email_service
 
 router = APIRouter(prefix="/todos", tags=["todos"])
@@ -55,11 +55,14 @@ def _notify_new_assignees(
     todo: dict,
     previous_assignee_ids: set[str],
 ) -> None:
-    """Best-effort email notification for assignees newly added to a task."""
-    actor_id = str(actor["id"])
+    """Best-effort email notification for assignees newly added to a task.
+
+    Everyone newly added is notified, including the assigner if they assign
+    themselves. Pre-existing assignees are not re-notified on edits.
+    """
     new_assignees = [
         a for a in todo.get("assignees", [])
-        if str(a["id"]) not in previous_assignee_ids and str(a["id"]) != actor_id
+        if str(a["id"]) not in previous_assignee_ids
     ]
     if not new_assignees:
         return
@@ -69,6 +72,15 @@ def _notify_new_assignees(
     except Exception as exc:
         logger.warning("Could not load users for todo assignment notifications: %s", exc)
         return
+
+    sender_tokens = email_repo.get_gmail_tokens_by_address(db, settings.notification_sender_email)
+    if not sender_tokens:
+        logger.warning(
+            "Notification sender %s not connected; skipping todo assignment emails",
+            settings.notification_sender_email,
+        )
+        return
+    sender_user_id = sender_tokens["user_id"]
 
     task_url = f"{settings.frontend_url.rstrip('/')}/todo-list/{todo['id']}"
     actor_name = _first_name(actor.get("full_name"), actor.get("email", "Someone"))
@@ -90,7 +102,7 @@ def _notify_new_assignees(
             logger.warning("Skipping todo assignment email for %s: no email address", assignee["id"])
             continue
         try:
-            email_service.send_direct_email(db, actor_id, recipient, subject, body)
+            email_service.send_direct_email(db, sender_user_id, recipient, subject, body)
         except Exception as exc:
             logger.warning("Todo assignment email failed for %s: %s", recipient, exc)
 

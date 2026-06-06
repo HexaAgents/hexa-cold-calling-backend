@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     google_client_secret: str = ""
     frontend_url: str = "http://localhost:8080"
     allowed_origins: str = "http://localhost:8080,http://localhost:3000"
+    notification_sender_email: str = "admin@hexaagents.com"
 
     @property
     def cors_origins(self) -> list[str]:
