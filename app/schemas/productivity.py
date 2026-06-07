@@ -33,3 +33,38 @@ class ProductivityResponse(BaseModel):
     rows: list[ProductivityRow]
     overall_breakdown: OutcomeBreakdown
     per_user_breakdown: list[UserOutcomeBreakdown]
+
+
+class HourBucket(BaseModel):
+    hour: int
+    total: int
+    pickups: int
+    interested: int
+    pickup_rate: float
+    interested_rate: float
+
+
+class HeatCell(BaseModel):
+    weekday: int
+    hour: int
+    total: int
+    pickups: int
+    pickup_rate: float
+
+
+class BestWindow(BaseModel):
+    weekday: int
+    hour: int
+    total: int
+    pickup_rate: float
+
+
+class BestCallTimesResponse(BaseModel):
+    timezone: str
+    min_sample: int
+    total_calls: int
+    overall_pickup_rate: float
+    hours: list[HourBucket]
+    heatmap: list[HeatCell]
+    best_hour: HourBucket | None
+    best_window: BestWindow | None
