@@ -11,3 +11,4 @@ build/
 .coverage
 htmlcov/
 key.json
+.DS_Store
