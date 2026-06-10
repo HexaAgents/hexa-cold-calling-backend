@@ -200,3 +200,36 @@ class TestDownloadFilteredCsv:
         resp = client.get("/imports/batch-1/filtered-csv")
         assert resp.status_code == 200
         assert "no_extension.filtered.csv" in resp.headers["content-disposition"]
+
+
+class TestDownloadDiscardedCsv:
+    def test_download_returns_csv_with_attachment_name(
+        self, client, mock_supabase, monkeypatch,
+    ):
+        from app.routers import imports as imports_router
+
+        csv_text = "Company Name,Website\r\nBad Co,https://bad.com\r\n"
+        monkeypatch.setattr(
+            imports_router.import_batch_repo,
+            "get_discarded_csv",
+            lambda db, batch_id: (csv_text, "leads.csv"),
+        )
+
+        resp = client.get("/imports/batch-1/discarded-csv")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/csv")
+        assert "leads.discarded.csv" in resp.headers["content-disposition"]
+        assert resp.text == csv_text
+
+    def test_download_missing_returns_404(self, client, mock_supabase, monkeypatch):
+        from app.routers import imports as imports_router
+
+        monkeypatch.setattr(
+            imports_router.import_batch_repo,
+            "get_discarded_csv",
+            lambda db, batch_id: None,
+        )
+
+        resp = client.get("/imports/batch-1/discarded-csv")
+        assert resp.status_code == 404
+        assert "not available" in resp.json()["detail"].lower()

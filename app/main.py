@@ -11,7 +11,7 @@ from app.config import settings
 from app.dependencies import get_supabase
 from app.repositories import import_batch_repo
 from app.routers import auth, contacts, companies, imports, calls, scheduled_calls, twilio_webhooks, sms, notes, settings as settings_router, apollo_webhooks, apollo_enrichment, productivity, email, todos
-from app.services import apollo_service
+from app.services import apollo_service, reactivation_service
 from app.tasks.sms_scheduler import run_sms_scheduler
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 _STALE_SWEEP_INTERVAL = 120
 _ENRICHMENT_SWEEP_INTERVAL = 600
+_REACTIVATION_INTERVAL = 86400
 
 
 async def _sweep_stale_imports_loop() -> None:
@@ -45,6 +46,21 @@ async def _sweep_enrichment_loop() -> None:
             logger.error("Enrichment sweep failed: %s", exc)
 
 
+async def _reactivate_stale_didnt_pickup_loop() -> None:
+    """Daily: re-queue stale didnt_pick_up contacts into the shared pool and re-enrich them."""
+    while True:
+        await asyncio.sleep(_REACTIVATION_INTERVAL)
+        try:
+            db = get_supabase()
+            # Runs synchronously (re-enrichment contains blocking Apollo HTTP + sleeps).
+            # Offload to a thread so we don't block the event loop.
+            await asyncio.to_thread(
+                reactivation_service.reactivate_stale_didnt_pickup_contacts, db
+            )
+        except Exception as exc:
+            logger.error("Reactivation sweep failed: %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
@@ -60,14 +76,26 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.error("Startup enrichment sweep failed: %s", exc)
 
+    # One-shot reactivation at startup: clear the existing backlog of stale
+    # didnt_pick_up contacts on deploy.
+    try:
+        db = get_supabase()
+        await asyncio.to_thread(
+            reactivation_service.reactivate_stale_didnt_pickup_contacts, db
+        )
+    except Exception as exc:
+        logger.error("Startup reactivation sweep failed: %s", exc)
+
     sms_task = asyncio.create_task(run_sms_scheduler())
     sweep_task = asyncio.create_task(_sweep_stale_imports_loop())
     enrich_task = asyncio.create_task(_sweep_enrichment_loop())
+    reactivate_task = asyncio.create_task(_reactivate_stale_didnt_pickup_loop())
     yield
+    reactivate_task.cancel()
     enrich_task.cancel()
     sweep_task.cancel()
     sms_task.cancel()
-    for t in (enrich_task, sweep_task, sms_task):
+    for t in (reactivate_task, enrich_task, sweep_task, sms_task):
         try:
             await t
         except asyncio.CancelledError:

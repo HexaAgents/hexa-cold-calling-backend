@@ -14,12 +14,12 @@ from app.repositories import contact_repo, import_batch_repo
 router = APIRouter(prefix="/imports", tags=["imports"])
 
 
-def _filtered_download_filename(original: str) -> str:
-    """Turn ``leads.csv`` into ``leads.filtered.csv`` while leaving anything
+def _suffixed_download_filename(original: str, suffix: str) -> str:
+    """Turn ``leads.csv`` into ``leads.{suffix}.csv`` while leaving anything
     that doesn't end in .csv alone (defensive — uploads are CSV-only)."""
     if original.lower().endswith(".csv"):
-        return f"{original[:-4]}.filtered.csv"
-    return f"{original}.filtered.csv"
+        return f"{original[:-4]}.{suffix}.csv"
+    return f"{original}.{suffix}.csv"
 
 
 def _run_import(batch_id: str, file_content: bytes, filename: str, user_id: str) -> None:
@@ -117,7 +117,33 @@ def download_filtered_csv(
             detail="Filtered CSV not available for this import",
         )
     csv_text, original_filename = result
-    download_name = _filtered_download_filename(original_filename)
+    download_name = _suffixed_download_filename(original_filename, "filtered")
+    return Response(
+        content=csv_text,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="{download_name}"',
+        },
+    )
+
+
+@router.get("/{batch_id}/discarded-csv")
+def download_discarded_csv(
+    batch_id: str,
+    current_user: CurrentUserDep,
+    db: SupabaseDep,
+):
+    """Stream the discarded copy of the imported CSV — same headers and column
+    order as the upload, containing only the rows dropped by scoring (rejected
+    company types and zero-score rows)."""
+    result = import_batch_repo.get_discarded_csv(db, batch_id)
+    if not result:
+        raise HTTPException(
+            status_code=404,
+            detail="Discarded CSV not available for this import",
+        )
+    csv_text, original_filename = result
+    download_name = _suffixed_download_filename(original_filename, "discarded")
     return Response(
         content=csv_text,
         media_type="text/csv",

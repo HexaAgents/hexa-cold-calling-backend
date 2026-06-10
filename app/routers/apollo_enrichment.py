@@ -4,7 +4,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 
 from app.dependencies import SupabaseDep, CurrentUserDep
-from app.services import apollo_service
+from app.services import apollo_service, reactivation_service
 
 router = APIRouter(prefix="/apollo", tags=["apollo"])
 
@@ -82,5 +82,24 @@ def retry_stale_enrichments(
 def enrichment_status(current_user: CurrentUserDep, db: SupabaseDep):
     """Return a full health summary used by the import page banner."""
     return apollo_service.get_enrichment_health(db)
+
+
+@router.post("/reactivate-stale")
+def reactivate_stale(
+    current_user: CurrentUserDep,
+    db: SupabaseDep,
+    background_tasks: BackgroundTasks,
+):
+    """Refeed stale "didn't pick up" contacts back into the shared call pool.
+
+    Re-queues contacts that didn't pick up after >= 2 call occasions whose last
+    attempt was over a week ago (sets retry_at, clears the owner so any caller
+    can claim them), then re-enriches them on Apollo in the background so fresh
+    numbers replace the old ones. Contacts are NOT re-scored.
+    """
+    ids = reactivation_service.reactivate_contacts(db)
+    if ids:
+        background_tasks.add_task(apollo_service.enrich_contacts, db, ids)
+    return {"status": "refeed_started", "reactivated": len(ids)}
 
 

@@ -64,7 +64,9 @@ def process_csv_upload(
 
     Once processing is done the kept-rows-only subset of the original CSV is
     written back to the batch as ``filtered_csv`` (same headers and column
-    order as the upload) so users can download the cleaned file.
+    order as the upload) so users can download the cleaned file. The exact
+    complement — the rejected and zero-score rows — is written back as
+    ``discarded_csv`` so users can audit what was dropped.
     """
     text = file_content.decode("utf-8-sig")
     reader = csv.DictReader(io.StringIO(text))
@@ -90,6 +92,7 @@ def process_csv_upload(
     processed = 0
     enriched = 0
     kept_raw_rows: list[dict[str, Any]] = []
+    discarded_raw_rows: list[dict[str, Any]] = []
 
     for i in range(0, len(rows), BATCH_SIZE):
         batch_rows = rows[i : i + BATCH_SIZE]
@@ -136,11 +139,15 @@ def process_csv_upload(
                 # The filtered CSV mirrors what the user will see in the
                 # call tracker: rejected contacts (hidden=True) are dropped,
                 # everything else (including scoring failures, which the
-                # user still works through manually) is kept.
+                # user still works through manually) is kept. The discarded
+                # CSV is the exact complement, so rejected rows land there.
                 if not contact.get("hidden"):
                     kept_raw_rows.append(raw_row)
+                else:
+                    discarded_raw_rows.append(raw_row)
             else:
                 discarded += 1
+                discarded_raw_rows.append(raw_row)
 
         if contacts_to_insert:
             inserted = _safe_insert_batch(db, contacts_to_insert)
@@ -161,6 +168,7 @@ def process_csv_upload(
     final_update: dict = {
         "status": "completed",
         "filtered_csv": _render_filtered_csv(fieldnames, kept_raw_rows),
+        "discarded_csv": _render_filtered_csv(fieldnames, discarded_raw_rows),
     }
     if not credits_available:
         final_update["enrichment_error"] = "Apollo credits exhausted"

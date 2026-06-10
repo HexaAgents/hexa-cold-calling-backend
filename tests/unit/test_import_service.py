@@ -529,6 +529,71 @@ class TestFilteredCsv:
         assert lines == ["Company Name,Website"]
 
 
+class TestDiscardedCsv:
+    def test_discarded_csv_is_complement_of_filtered(self, _mock_deps):
+        """Discarded CSV holds exactly the rows the filtered CSV drops:
+        rejected rows land here, kept rows do not, headers preserved."""
+        from app.services.import_service import process_csv_upload
+
+        def _side_effect(**kwargs):
+            if kwargs["website"] == "https://good.com":
+                return _good_score(80)
+            return {
+                "score": 10,
+                "company_type": "rejected",
+                "rationale": "off-topic",
+                "rejection_reason": "off_topic",
+                "exa_scrape_success": True,
+                "scoring_failed": False,
+            }
+
+        _mock_deps["score_website"].side_effect = _side_effect
+        csv_data = _csv_bytes(
+            "Good Co,https://good.com",
+            "Bad Co,https://bad.com",
+        )
+        db = MagicMock()
+
+        process_csv_upload(db, csv_data, "test.csv", "user-1", "batch-1")
+
+        final = _mock_deps["update_batch"].call_args_list[-1][0][2]
+        assert "discarded_csv" in final
+        lines = final["discarded_csv"].splitlines()
+        assert lines[0] == "Company Name,Website"
+        assert lines[1].startswith("Bad Co,")
+        assert all("Good Co" not in line for line in lines)
+        assert len(lines) == 2  # header + 1 discarded row
+
+    def test_discarded_csv_includes_zero_score_rows(self, _mock_deps):
+        """A zero-score row is discarded (not stored) and appears in the CSV."""
+        from app.services.import_service import process_csv_upload
+
+        _mock_deps["score_website"].return_value = _good_score(0)
+        csv_data = _csv_bytes("ACME Corp,https://acme.com")
+        db = MagicMock()
+
+        process_csv_upload(db, csv_data, "test.csv", "user-1", "batch-1")
+
+        final = _mock_deps["update_batch"].call_args_list[-1][0][2]
+        lines = final["discarded_csv"].splitlines()
+        assert lines[0] == "Company Name,Website"
+        assert lines[1].startswith("ACME Corp,")
+
+    def test_discarded_csv_empty_when_all_kept(self, _mock_deps):
+        """All rows kept → discarded CSV has just the header row."""
+        from app.services.import_service import process_csv_upload
+
+        _mock_deps["score_website"].return_value = _good_score(80)
+        csv_data = _csv_bytes("Good Co,https://good.com")
+        db = MagicMock()
+
+        process_csv_upload(db, csv_data, "test.csv", "user-1", "batch-1")
+
+        final = _mock_deps["update_batch"].call_args_list[-1][0][2]
+        lines = final["discarded_csv"].splitlines()
+        assert lines == ["Company Name,Website"]
+
+
 class TestSafeInsertBatch:
     def test_batch_insert_fallback_to_individual(self, _mock_deps):
         """If batch insert fails, rows are retried individually."""

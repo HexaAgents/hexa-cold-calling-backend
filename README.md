@@ -58,7 +58,7 @@ Copy `.env.example` to `.env` for local development. Keep `.env` local and never
 - Auth: login and current-user introspection.
 - Contacts and companies: contact CRUD, search, grouping, phone cleanup, notes, and call history.
 - Calls: browser token generation, claim/release queueing, call logging, callbacks, and outcome tracking.
-- Imports: CSV upload, scoring/enrichment pipeline, batch status, filtered CSV download, and stale import recovery.
+- Imports: CSV upload, scoring/enrichment pipeline, batch status, filtered + discarded CSV downloads, and stale import recovery.
 - Twilio and SMS: voice TwiML/status webhooks plus direct/scheduled SMS.
 - Gmail: OAuth connect/callback, send, draft, logs, sync, tracking summaries, and threads.
 - Apollo: enrichment requests and webhook ingestion.
