@@ -4,8 +4,6 @@ import logging
 
 from supabase import Client
 
-from app.services import apollo_service
-
 logger = logging.getLogger(__name__)
 
 REACTIVATE_MIN_OCCASIONS = 2
@@ -20,7 +18,9 @@ def reactivate_contacts(db: Client) -> list[str]:
     contacts (didnt_pick_up, called on >= REACTIVATE_MIN_OCCASIONS occasions,
     last call > REACTIVATE_STALE_DAYS days ago) so any caller can claim them.
 
-    Returns the ids of the reactivated contacts (DB-only, no enrichment).
+    DB-only: contacts are never re-enriched or re-scored.
+
+    Returns the ids of the reactivated contacts.
     """
     res = (
         db.rpc(
@@ -31,20 +31,7 @@ def reactivate_contacts(db: Client) -> list[str]:
             },
         ).execute()
     )
-    return [row["id"] for row in (res.data or []) if row.get("id")]
-
-
-def reactivate_stale_didnt_pickup_contacts(db: Client) -> dict:
-    """Reactivate stale "didn't pick up" contacts and re-enrich them on Apollo.
-
-    The reactivated contacts are re-enriched so fresh phone numbers overwrite
-    the old ones. Scoring is never invoked.
-    """
-    ids = reactivate_contacts(db)
-
-    if not ids:
-        return {"reactivated": 0, "enrichment": {"enriched": 0, "total": 0}}
-
-    logger.info("Reactivated %d stale didnt_pick_up contacts; re-enriching", len(ids))
-    enrichment = apollo_service.enrich_contacts(db, ids)
-    return {"reactivated": len(ids), "enrichment": enrichment}
+    ids = [row["id"] for row in (res.data or []) if row.get("id")]
+    if ids:
+        logger.info("Reactivated %d stale didnt_pick_up contacts", len(ids))
+    return ids

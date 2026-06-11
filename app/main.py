@@ -47,16 +47,14 @@ async def _sweep_enrichment_loop() -> None:
 
 
 async def _reactivate_stale_didnt_pickup_loop() -> None:
-    """Daily: re-queue stale didnt_pick_up contacts into the shared pool and re-enrich them."""
+    """Daily: re-queue stale didnt_pick_up contacts into the shared pool (DB-only)."""
     while True:
         await asyncio.sleep(_REACTIVATION_INTERVAL)
         try:
             db = get_supabase()
-            # Runs synchronously (re-enrichment contains blocking Apollo HTTP + sleeps).
-            # Offload to a thread so we don't block the event loop.
-            await asyncio.to_thread(
-                reactivation_service.reactivate_stale_didnt_pickup_contacts, db
-            )
+            # Synchronous supabase call; offload to a thread so we don't block
+            # the event loop.
+            await asyncio.to_thread(reactivation_service.reactivate_contacts, db)
         except Exception as exc:
             logger.error("Reactivation sweep failed: %s", exc)
 
@@ -77,12 +75,10 @@ async def lifespan(app: FastAPI):
         logger.error("Startup enrichment sweep failed: %s", exc)
 
     # One-shot reactivation at startup: clear the existing backlog of stale
-    # didnt_pick_up contacts on deploy.
+    # didnt_pick_up contacts on deploy (DB-only re-queue, no enrichment).
     try:
         db = get_supabase()
-        await asyncio.to_thread(
-            reactivation_service.reactivate_stale_didnt_pickup_contacts, db
-        )
+        await asyncio.to_thread(reactivation_service.reactivate_contacts, db)
     except Exception as exc:
         logger.error("Startup reactivation sweep failed: %s", exc)
 

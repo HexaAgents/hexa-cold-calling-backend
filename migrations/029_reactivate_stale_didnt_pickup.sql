@@ -6,8 +6,7 @@
 --      ANY caller, not just the user who originally called it.
 --   2. reactivate_stale_didnt_pickup_contacts(): re-queues silenced didnt_pick_up
 --      contacts (called on >= N occasions, last call > M days ago) by setting
---      retry_at = NOW() and clearing assigned_to/assigned_at, and returns their ids
---      so the app can re-enrich them on Apollo.
+--      retry_at = NOW() and clearing assigned_to/assigned_at, and returns their ids.
 
 -- 1. Recreate claim_next_contact (same as migration 018 + shared-retry branch)
 CREATE OR REPLACE FUNCTION claim_next_contact(
