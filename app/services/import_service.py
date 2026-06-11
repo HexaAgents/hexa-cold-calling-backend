@@ -57,7 +57,11 @@ def process_csv_upload(
     user_id: str,
     batch_id: str,
 ) -> str:
-    """Parse CSV, score, insert, and enrich contacts in streaming batches.
+    """Parse CSV, dedupe, score, insert, and enrich contacts in streaming batches.
+
+    Rows whose (first name, last name, LinkedIn URL) match a contact already
+    in the database — or an earlier row in the same file — are skipped before
+    scoring so the same person is never stored or enriched twice.
 
     Each batch of BATCH_SIZE rows is scored, inserted, and enriched before
     moving to the next batch so contacts become callable as fast as possible.
@@ -82,17 +86,41 @@ def process_csv_upload(
 
     import_batch_repo.update_batch(db, batch_id, {"total_rows": len(rows)})
 
+    # Duplicate scan: skip rows whose (first name, last name, LinkedIn URL)
+    # already exists in the database — or earlier in this same CSV — so the
+    # same person is never inserted, scored, or enriched twice.
+    existing_keys = contact_repo.get_existing_identity_keys(db)
+    seen_keys: set[tuple[str, str, str]] = set()
+    deduped_rows: list[dict[str, Any]] = []
+    deduped_raw_rows: list[dict[str, Any]] = []
+    duplicate_raw_rows: list[dict[str, Any]] = []
+    for raw_row, row in zip(raw_rows, rows):
+        key = contact_repo.contact_identity_key(row)
+        if key and (key in existing_keys or key in seen_keys):
+            duplicate_raw_rows.append(raw_row)
+            continue
+        if key:
+            seen_keys.add(key)
+        deduped_rows.append(row)
+        deduped_raw_rows.append(raw_row)
+    rows, raw_rows = deduped_rows, deduped_raw_rows
+
+    duplicates = len(duplicate_raw_rows)
+    if duplicates:
+        logger.info("Import %s: skipping %d duplicate contacts that already exist", batch_id, duplicates)
+
     credits_available = _retry_pending_enrichments(db, batch_id)
 
     all_websites = list({r["website"] for r in rows if r.get("website")})
     scored_cache = contact_repo.get_existing_scores(db, all_websites)
 
     stored = 0
-    discarded = 0
-    processed = 0
+    discarded = duplicates
+    processed = duplicates
     enriched = 0
     kept_raw_rows: list[dict[str, Any]] = []
-    discarded_raw_rows: list[dict[str, Any]] = []
+    # Skipped duplicates land in the discarded CSV so the upload is auditable.
+    discarded_raw_rows: list[dict[str, Any]] = list(duplicate_raw_rows)
 
     for i in range(0, len(rows), BATCH_SIZE):
         batch_rows = rows[i : i + BATCH_SIZE]
@@ -167,6 +195,11 @@ def process_csv_upload(
 
     final_update: dict = {
         "status": "completed",
+        # Written here too so counts are correct even when every row was a
+        # duplicate and the batch loop never ran.
+        "processed_rows": processed,
+        "stored_rows": stored,
+        "discarded_rows": discarded,
         "filtered_csv": _render_filtered_csv(fieldnames, kept_raw_rows),
         "discarded_csv": _render_filtered_csv(fieldnames, discarded_raw_rows),
     }

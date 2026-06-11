@@ -100,6 +100,46 @@ def silence_exhausted_didnt_pick_up_contacts(db: Client, threshold: int) -> int:
     return len(result.data) if result.data else 0
 
 
+def contact_identity_key(row: dict) -> tuple[str, str, str] | None:
+    """Normalized (first_name, last_name, person_linkedin_url) identity key.
+
+    Used to detect the same person across imports. Returns None when the row
+    has no identifying fields at all (so such rows are never treated as
+    duplicates of each other).
+    """
+    first = (row.get("first_name") or "").strip().lower()
+    last = (row.get("last_name") or "").strip().lower()
+    linkedin = (row.get("person_linkedin_url") or "").strip().lower().rstrip("/")
+    if not (first or last or linkedin):
+        return None
+    return (first, last, linkedin)
+
+
+_IDENTITY_PAGE = 1000
+
+
+def get_existing_identity_keys(db: Client) -> set[tuple[str, str, str]]:
+    """Return identity keys for every contact already in the database."""
+    keys: set[tuple[str, str, str]] = set()
+    offset = 0
+    while True:
+        result = (
+            db.table("contacts")
+            .select("first_name, last_name, person_linkedin_url")
+            .range(offset, offset + _IDENTITY_PAGE - 1)
+            .execute()
+        )
+        rows = result.data or []
+        for row in rows:
+            key = contact_identity_key(row)
+            if key:
+                keys.add(key)
+        if len(rows) < _IDENTITY_PAGE:
+            break
+        offset += _IDENTITY_PAGE
+    return keys
+
+
 _SCORE_FIELDS = "website, score, company_type, rationale, rejection_reason, exa_scrape_success, company_description"
 _SCORE_QUERY_CHUNK = 50
 

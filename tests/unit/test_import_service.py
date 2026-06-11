@@ -97,6 +97,7 @@ def _mock_deps():
     with (
         patch("app.services.import_service.score_website") as mock_score,
         patch("app.repositories.contact_repo.get_existing_scores", return_value={}) as mock_existing,
+        patch("app.repositories.contact_repo.get_existing_identity_keys", return_value=set()) as mock_identity,
         patch("app.repositories.contact_repo.create_contacts_batch") as mock_create,
         patch("app.repositories.import_batch_repo.update_batch") as mock_update,
         patch("app.services.import_service.settings") as mock_settings,
@@ -109,6 +110,7 @@ def _mock_deps():
         yield {
             "score_website": mock_score,
             "get_existing_scores": mock_existing,
+            "get_existing_identity_keys": mock_identity,
             "create_contacts_batch": mock_create,
             "update_batch": mock_update,
             "settings": mock_settings,
@@ -251,6 +253,161 @@ class TestProcessCsvUpload:
         process_csv_upload(db, csv, "test.csv", "user-1", "batch-1")
 
         _mock_deps["create_contacts_batch"].assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Duplicate-contact scan tests
+# ---------------------------------------------------------------------------
+
+PERSON_HEADERS = "First Name,Last Name,Person Linkedin Url,Company Name,Website"
+
+
+class TestImportDedupe:
+    def test_existing_contact_skipped_not_inserted_or_scored(self, _mock_deps):
+        """A row matching an existing contact (first+last+linkedin) is never
+        re-inserted, re-scored, or sent to enrichment."""
+        from app.services.import_service import process_csv_upload
+
+        _mock_deps["get_existing_identity_keys"].return_value = {
+            ("alice", "smith", "http://www.linkedin.com/in/alice"),
+        }
+        _mock_deps["score_website"].return_value = _good_score(85)
+        csv = _csv_bytes(
+            "Alice,Smith,http://www.linkedin.com/in/alice,ACME Corp,https://acme.com",
+            headers=PERSON_HEADERS,
+        )
+        db = MagicMock()
+
+        process_csv_upload(db, csv, "test.csv", "user-1", "batch-1")
+
+        _mock_deps["create_contacts_batch"].assert_not_called()
+        _mock_deps["score_website"].assert_not_called()
+
+    def test_existing_match_is_case_and_slash_insensitive(self, _mock_deps):
+        """Identity matching normalizes case and trailing slashes."""
+        from app.services.import_service import process_csv_upload
+
+        _mock_deps["get_existing_identity_keys"].return_value = {
+            ("alice", "smith", "http://www.linkedin.com/in/alice"),
+        }
+        _mock_deps["score_website"].return_value = _good_score(85)
+        csv = _csv_bytes(
+            "ALICE,Smith,HTTP://www.linkedin.com/in/Alice/,ACME Corp,https://acme.com",
+            headers=PERSON_HEADERS,
+        )
+        db = MagicMock()
+
+        process_csv_upload(db, csv, "test.csv", "user-1", "batch-1")
+
+        _mock_deps["create_contacts_batch"].assert_not_called()
+
+    def test_duplicate_within_same_csv_inserted_once(self, _mock_deps):
+        """The same person twice in one upload is only stored once."""
+        from app.services.import_service import process_csv_upload
+
+        _mock_deps["score_website"].return_value = _good_score(85)
+        csv = _csv_bytes(
+            "Alice,Smith,http://www.linkedin.com/in/alice,ACME Corp,https://acme.com",
+            "Alice,Smith,http://www.linkedin.com/in/alice,ACME Corp,https://acme.com",
+            headers=PERSON_HEADERS,
+        )
+        db = MagicMock()
+
+        process_csv_upload(db, csv, "test.csv", "user-1", "batch-1")
+
+        all_contacts = []
+        for c in _mock_deps["create_contacts_batch"].call_args_list:
+            all_contacts.extend(c[0][1])
+        assert len(all_contacts) == 1
+
+    def test_different_person_not_skipped(self, _mock_deps):
+        """A different person (different linkedin) is still imported."""
+        from app.services.import_service import process_csv_upload
+
+        _mock_deps["get_existing_identity_keys"].return_value = {
+            ("alice", "smith", "http://www.linkedin.com/in/alice"),
+        }
+        _mock_deps["score_website"].return_value = _good_score(85)
+        csv = _csv_bytes(
+            "Bob,Jones,http://www.linkedin.com/in/bob,ACME Corp,https://acme.com",
+            headers=PERSON_HEADERS,
+        )
+        db = MagicMock()
+
+        process_csv_upload(db, csv, "test.csv", "user-1", "batch-1")
+
+        contacts = _mock_deps["create_contacts_batch"].call_args[0][1]
+        assert len(contacts) == 1
+        assert contacts[0]["first_name"] == "Bob"
+
+    def test_skipped_duplicates_counted_and_in_discarded_csv(self, _mock_deps):
+        """Skipped duplicates are counted as discarded and audited in the
+        discarded CSV; the kept row appears in the filtered CSV."""
+        from app.services.import_service import process_csv_upload
+
+        _mock_deps["get_existing_identity_keys"].return_value = {
+            ("alice", "smith", "http://www.linkedin.com/in/alice"),
+        }
+        _mock_deps["score_website"].return_value = _good_score(85)
+        csv = _csv_bytes(
+            "Alice,Smith,http://www.linkedin.com/in/alice,ACME Corp,https://acme.com",
+            "Bob,Jones,http://www.linkedin.com/in/bob,Beta Inc,https://beta.com",
+            headers=PERSON_HEADERS,
+        )
+        db = MagicMock()
+
+        process_csv_upload(db, csv, "test.csv", "user-1", "batch-1")
+
+        final = _mock_deps["update_batch"].call_args_list[-1][0][2]
+        assert final["status"] == "completed"
+        assert final["processed_rows"] == 2
+        assert final["stored_rows"] == 1
+        assert final["discarded_rows"] == 1
+        assert "Alice" in final["discarded_csv"]
+        assert "Bob" not in final["discarded_csv"]
+        assert "Bob" in final["filtered_csv"]
+
+    def test_all_duplicates_still_completes_with_counts(self, _mock_deps):
+        """Every row a duplicate: batch completes with correct counts even
+        though the insert loop never runs."""
+        from app.services.import_service import process_csv_upload
+
+        _mock_deps["get_existing_identity_keys"].return_value = {
+            ("alice", "smith", "http://www.linkedin.com/in/alice"),
+        }
+        csv = _csv_bytes(
+            "Alice,Smith,http://www.linkedin.com/in/alice,ACME Corp,https://acme.com",
+            headers=PERSON_HEADERS,
+        )
+        db = MagicMock()
+
+        process_csv_upload(db, csv, "test.csv", "user-1", "batch-1")
+
+        _mock_deps["create_contacts_batch"].assert_not_called()
+        final = _mock_deps["update_batch"].call_args_list[-1][0][2]
+        assert final["status"] == "completed"
+        assert final["processed_rows"] == 1
+        assert final["stored_rows"] == 0
+        assert final["discarded_rows"] == 1
+
+    def test_rows_without_identity_fields_never_treated_as_duplicates(self, _mock_deps):
+        """Rows with no name/linkedin at all are not deduped against each other."""
+        from app.services.import_service import process_csv_upload
+
+        _mock_deps["score_website"].return_value = _good_score(85)
+        csv = _csv_bytes(
+            "ACME Corp,https://acme.com",
+            "Beta Inc,https://beta.com",
+            headers="Company Name,Website",
+        )
+        db = MagicMock()
+
+        process_csv_upload(db, csv, "test.csv", "user-1", "batch-1")
+
+        all_contacts = []
+        for c in _mock_deps["create_contacts_batch"].call_args_list:
+            all_contacts.extend(c[0][1])
+        assert len(all_contacts) == 2
 
 
 # ---------------------------------------------------------------------------
