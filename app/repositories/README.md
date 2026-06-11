@@ -102,7 +102,7 @@ def delete_contact(db: Client, contact_id: str) -> bool:
 
 Deletes a contact by id. Returns `True` if a row was actually deleted, `False` if nothing matched.
 
-### `get_existing_scores()` (lines 57-73)
+### `get_existing_scores()`
 
 ```python
 def get_existing_scores(db: Client, websites: list[str]) -> dict[str, dict]:
@@ -110,11 +110,27 @@ def get_existing_scores(db: Client, websites: list[str]) -> dict[str, dict]:
 
 Called during CSV import scoring to **avoid re-scoring websites that were already scored** in a previous import. When a new CSV is uploaded, many rows may share a website with contacts that were imported before. Scoring is expensive (Exa API call + OpenAI API call per website), so this function returns a lookup map of `website → scoring result` for all websites that already have a non-null score.
 
-**Line 59-60 — Early exit:** If the website list is empty, return an empty dict immediately. This avoids an `IN ()` query that some databases reject.
+**Early exit:** If the website list is empty, return an empty dict immediately. This avoids an `IN ()` query that some databases reject.
 
-**Lines 61-67 — Query:** Selects only the scoring-related columns (`website`, `score`, `company_type`, `rationale`, `rejection_reason`, `exa_scrape_success`) for rows whose `website` is in the provided list AND whose `score` is not null. The `.not_.is_("score", "null")` clause filters out contacts that were imported but haven't been scored yet (or whose scoring failed).
+**Query:** Selects only the scoring-related columns (`website`, `score`, `company_type`, `rationale`, `rejection_reason`, `exa_scrape_success`, `company_description`) for rows whose `website` is in the provided list AND whose `score` is not null. Websites are queried in chunks of `_SCORE_QUERY_CHUNK` (50) to keep the `IN` clause bounded. The `.not_.is_("score", "null")` clause filters out contacts that were imported but haven't been scored yet.
 
-**Lines 68-73 — Deduplication loop:** Multiple contacts can share the same website. The loop iterates over the result rows and builds a dict keyed by website. The `if w and w not in scores` check means only the first row for each website is kept — this is intentional because all contacts with the same website receive the same score, so any one row's scoring data is representative.
+**Best-verdict selection:** Multiple contacts can share the same website, and a website can carry conflicting verdicts (e.g. old rejected rows plus a newer passing row after re-evaluation under an updated prompt). The loop keeps the **best** row per website using `_score_row_rank()` — distributor rows beat rejected rows, then higher scores win. This ensures the import service's cache-reuse policy (`_is_reusable_score()` in `import_service.py`: reuse only `distributor` rows scoring >= 40) sees a passing verdict when one exists, instead of needlessly re-scoring a company because a stale rejected row happened to be returned first.
+
+### `contact_identity_key()` and `get_existing_identity_keys()`
+
+```python
+def contact_identity_key(row: dict) -> tuple[str, str, str] | None:
+def get_existing_identity_keys(db: Client) -> tuple[set, set]:
+```
+
+The contact-deduplication primitives used by the CSV import.
+
+`contact_identity_key()` normalizes a contact (or mapped CSV row) into a `(first_name, last_name, person_linkedin_url)` tuple: lowercased, whitespace-stripped, with trailing slashes removed from the LinkedIn URL. Returns `None` when the row has none of the identity fields, so identity-less rows are never deduped against each other.
+
+`get_existing_identity_keys()` pages through the entire contacts table (`_IDENTITY_PAGE` = 1000 rows per request, selecting only the identity columns plus `company_type` and `hidden`) and returns **two sets**:
+
+- **`passing_keys`** — identities with at least one *live* contact (not `company_type = "rejected"`, not `hidden`). The import skips these rows entirely so the same person is never inserted, scored, or enriched twice.
+- **`failed_only_keys`** — identities that exist *only* as rejected/hidden rows. The import lets these rows through so the company can be re-evaluated under the current scoring prompt; if it still fails, no second rejected copy is stored.
 
 ### `get_contacts_needing_sms()` (lines 76-86)
 

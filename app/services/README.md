@@ -85,7 +85,7 @@ Merges the OpenAI scoring result with two additional flags. `exa_scrape_success`
 
 ## 2. `import_service.py` — CSV Upload Processing
 
-This is the most complex service. It handles the full lifecycle of importing an Apollo CSV export: parsing, column mapping, deduplication by website, scoring, filtering, batch insertion, and progress tracking.
+This is the most complex service. It handles the full lifecycle of importing an Apollo CSV export: parsing, column mapping, contact deduplication, website scoring, filtering, batch insertion, Apollo enrichment, and progress tracking.
 
 ### Imports
 
@@ -96,9 +96,9 @@ from app.services.scoring_service import score_website
 ```
 
 - `settings` — application config singleton containing API keys.
-- `contact_repo` — repository for contacts table operations.
+- `contact_repo` — repository for contacts table operations (also provides the dedupe identity helpers and the cached-score lookup).
 - `import_batch_repo` — repository for the `import_batches` progress-tracking table.
-- `score_website` — the scoring pipeline from `scoring_service.py`, called for each unique website.
+- `score_website` — the scoring pipeline from `scoring_service.py`, called for each unique website that needs (re-)scoring.
 
 ### `COLUMN_MAP` (module-level constant)
 
@@ -113,6 +113,7 @@ COLUMN_MAP: dict[str, str] = {
     "Company Linkedin Url": "company_linkedin_url",
     "# Employees": "employees",
     "City": "city",
+    "State": "state",
     "Country": "country",
     "Email": "email",
     "Phone": "mobile_phone",
@@ -126,15 +127,35 @@ Maps **Apollo CSV column headers** (left) to **database column names** (right). 
 
 - Both `"Phone"` and `"Mobile Phone"` map to the same DB column `"mobile_phone"`. This creates a potential collision handled by `_map_row()` (first non-empty value wins).
 - Apollo-specific headers like `"# Employees"` and `"Person Linkedin Url"` are normalized to snake_case DB names.
-- Any CSV column **not** present in this dict is silently discarded.
+- Any CSV column **not** present in this dict is silently discarded from the database insert (but preserved in the filtered/discarded CSV exports, which re-emit original rows).
 
-### `BATCH_SIZE = 10`
+### Module constants
 
-Controls how many rows are processed between progress updates. After every 10 rows, the `import_batches` table is updated with current counters so the frontend can poll for progress.
+| Constant | Value | Meaning |
+|---|---|---|
+| `BATCH_SIZE` | 10 | Rows per streaming chunk; each chunk is scored, inserted, and enriched before the next begins, and progress is written to `import_batches` after each chunk. |
+| `MAX_SCORING_WORKERS` | 8 | Thread-pool size for concurrent website scoring within a chunk. |
+| `SCORING_TIMEOUT` | 90 | Seconds to wait for a single website's scoring future. |
+| `ENRICHMENT_MIN_SCORE` | 40 | The passing floor. Contacts scoring >= 40 without a mobile phone are queued for Apollo enrichment. 40 (rather than 50) includes the 40-49 "adjacent B2B distributor" band from the scoring prompt. Also used by `_is_reusable_score()` as the cache-reuse floor. |
+| `_FAILED_SCORE` | dict | Synthetic zero-score result used for rows with no website. |
+| `_PHONE_FIELDS` | tuple | The three phone columns checked when deciding enrichment. |
 
-### `process_csv_upload(db, file_content, filename, user_id) → str`
+### `_is_reusable_score(cached) → bool`
 
-**Purpose:** Parse a CSV file uploaded by the user, score every unique company, filter out zero-score contacts, insert qualifying contacts into the database, and track progress throughout. Returns the `batch_id` for the frontend to poll.
+The cached-score policy, used to decide whether a website found in `contact_repo.get_existing_scores()` can skip re-scoring:
+
+```python
+return (
+    cached.get("company_type") == "distributor"
+    and (cached.get("score") or 0) >= ENRICHMENT_MIN_SCORE
+)
+```
+
+A cached verdict is reused **only if the company already passed filtering** — it is a `distributor` scoring at or above the 40 floor. Everything else (previously rejected companies, error-scored rows, sub-floor scores) is re-evaluated under the *current* prompt on the next import. This is what lets prompt changes take effect retroactively: re-importing a CSV re-scores all the companies that failed under an older prompt, while never spending Exa/OpenAI credits on companies that already passed.
+
+### `process_csv_upload(db, file_content, filename, user_id, batch_id) → str`
+
+**Purpose:** Parse an uploaded CSV, dedupe contacts, score every unique company (in streaming batches), insert qualifying contacts, enrich phoneless ones via Apollo, and track progress throughout. Returns the `batch_id` for the frontend to poll.
 
 **Parameters:**
 
@@ -144,166 +165,48 @@ Controls how many rows are processed between progress updates. After every 10 ro
 | `file_content` | `bytes` | Raw bytes of the uploaded CSV file |
 | `filename` | `str` | Original filename, stored for audit/display |
 | `user_id` | `str` | ID of the user who uploaded the file |
+| `batch_id` | `str` | ID of the pre-created `import_batches` row (the router creates the batch and stores the raw upload as `input_csv` before scheduling this function) |
 
-**Line-by-line walkthrough:**
+**Stage-by-stage walkthrough:**
 
-```python
-text = file_content.decode("utf-8-sig")
-```
+**1. Parse and map.** The file is decoded with `utf-8-sig` (handles the BOM Excel/Apollo prepend), parsed with `csv.DictReader`, and every row is run through `_map_row()`. Raw rows and mapped rows are kept in lock-step lists so the original rows can later be re-emitted into the filtered/discarded CSV exports. Rows with no `company_name` after mapping are dropped from both lists.
 
-Decodes the raw bytes to a string. The `utf-8-sig` codec handles the BOM (Byte Order Mark) that Excel and some Apollo exports prepend to CSV files. Without this, the first column header would contain invisible `\ufeff` characters and fail to match `COLUMN_MAP`.
+**2. Duplicate scan.** `contact_repo.get_existing_identity_keys(db)` returns two sets of normalized `(first_name, last_name, person_linkedin_url)` identity keys:
 
-```python
-reader = csv.DictReader(io.StringIO(text))
-```
+- `passing_keys` — identities with at least one **live** contact (not rejected, not hidden). Rows matching these — or matching an earlier row in the same file (`seen_keys`) — are skipped entirely: never scored, inserted, or enriched. They are counted as discarded and appended to the discarded CSV for audit.
+- `failed_only_keys` — identities that exist **only** as rejected/hidden contacts. These rows are kept so their company can be re-evaluated under the current prompt (see stage 5).
 
-Creates a `csv.DictReader` that yields each row as a `{column_header: value}` dict. The `io.StringIO` wrapper converts the string to a file-like object that `csv.DictReader` requires.
+**3. Pre-flight enrichment retry.** `_retry_pending_enrichments()` attempts to enrich contacts left in `pending_enrichment` by previous imports (e.g. because Apollo credits ran out). If Apollo reports `no_credits`, enrichment is disabled for the rest of this import.
 
-```python
-rows = [_map_row(row, reader.fieldnames or []) for row in reader]
-```
+**4. Streaming batch loop.** Rows are processed in chunks of `BATCH_SIZE`. For each chunk:
 
-Iterates every CSV row through `_map_row()` to translate Apollo column names to DB column names. The result is a list of dicts with DB-compatible keys.
+- Unique websites whose cached verdict fails `_is_reusable_score()` are collected and scored concurrently by `_score_batch()` (a `ThreadPoolExecutor` with `MAX_SCORING_WORKERS` threads). Scoring exceptions become synthetic zero-score results with `scoring_failed: True` so one bad website never blocks the import.
+- New scores are merged into the cache so later chunks and duplicate websites within the file reuse them.
 
-```python
-rows = [r for r in rows if r.get("company_name")]
-```
+**5. Per-row filtering.** For each row in the chunk:
 
-Filters out any rows that have no `company_name` after mapping. A contact without a company name cannot be scored or meaningfully used, so it is discarded immediately.
+- No website → synthetic `_FAILED_SCORE` (discarded below).
+- **Re-evaluation guard:** if the row's identity is in `failed_only_keys` and its company is rejected *again*, the row is discarded rather than stored — the rejected/hidden copy already in the database is not duplicated. If the company now passes, the row proceeds and is stored as a fresh live contact.
+- A contact is inserted if **either** (a) score > 0 (rejected-but-scored companies are stored `hidden: true` for audit), or (b) `scoring_failed` is `True` (visible for manual review/retry). Score 0 without failure → discarded.
+- Contacts without a mobile phone scoring >= `ENRICHMENT_MIN_SCORE` get `enrichment_status: "pending_enrichment"`.
+- Kept (non-hidden) rows accumulate into `kept_raw_rows`; everything else lands in `discarded_raw_rows`. These drive the CSV exports.
 
-```python
-batch = import_batch_repo.create_batch(db, {
-    "user_id": user_id,
-    "filename": filename,
-    "total_rows": len(rows),
-    "status": "processing",
-})
-batch_id = batch["id"]
-```
+**6. Insert and enrich.** `_safe_insert_batch()` bulk-inserts the chunk's contacts, falling back to row-by-row inserts if the bulk call fails so one bad row can't sink the chunk. If Apollo credits are available, `_enrich_batch()` immediately sends the chunk's `pending_enrichment` contacts for phone enrichment — contacts become callable as soon as possible rather than at the end of the import. Progress counters (`processed_rows`, `stored_rows`, `discarded_rows`, `enriched_rows`) are written to `import_batches` after every chunk for frontend polling.
 
-Creates a record in the `import_batches` table to track this import's progress. The initial status is `"processing"`. The returned `batch_id` (UUID) is used as a foreign key on every contact inserted from this batch, and is returned to the caller for progress polling.
+**7. Finalize.** The batch is marked `completed` with final counts, plus two generated CSVs rendered by `_render_filtered_csv()` with the original headers and column order:
 
-```python
-websites = list({r["website"] for r in rows if r.get("website")})
-existing_scores = contact_repo.get_existing_scores(db, websites)
-```
+- `filtered_csv` — exactly the rows that appear in the call tracker (rejected/hidden rows dropped).
+- `discarded_csv` — the exact complement: rejected rows, zero-score rows, and skipped duplicates.
 
-Collects all unique website URLs from the parsed rows (set comprehension deduplicates). Then queries the database for any contacts that already have scores for these websites. `existing_scores` is a `dict[str, dict]` mapping website URL → scoring data. This avoids re-calling Exa + OpenAI for companies that were scored in a previous import.
+If Apollo credits ran out mid-import, `enrichment_error: "Apollo credits exhausted"` is also recorded.
 
-```python
-stored = 0
-discarded = 0
-processed = 0
-```
+### Helper functions
 
-Initializes three counters: `stored` tracks contacts inserted into the DB, `discarded` tracks contacts filtered out (score = 0), and `processed` tracks total rows examined. These are written to `import_batches` on every batch boundary.
-
-```python
-for i in range(0, len(rows), BATCH_SIZE):
-    batch_rows = rows[i : i + BATCH_SIZE]
-    contacts_to_insert: list[dict] = []
-```
-
-Outer loop: processes rows in chunks of `BATCH_SIZE` (10). For each chunk, `contacts_to_insert` accumulates the contacts that pass the score filter and will be inserted together at the end of the chunk.
-
-```python
-for row in batch_rows:
-    processed += 1
-    website = row.get("website", "")
-```
-
-Inner loop: processes each row individually. Extracts the website URL for score lookup/computation.
-
-```python
-if website and website in existing_scores:
-    score_data = existing_scores[website]
-```
-
-**Fast path:** If this website was already scored (either from the database or from an earlier row in this same import), reuse the cached score. No API calls are made.
-
-```python
-elif website:
-    try:
-        score_data = score_website(
-            exa_api_key=settings.exa_api_key,
-            openai_api_key=settings.openai_api_key,
-            openai_model=settings.openai_model,
-            website=website,
-            company_name=row.get("company_name", ""),
-            job_title=row.get("title", ""),
-        )
-    except Exception as exc:
-        logger.error("Scoring failed for %s: %s", website, exc)
-        score_data = {
-            "score": 0,
-            "company_type": "rejected",
-            "rationale": f"Scoring error: {str(exc)[:200]}",
-            "rejection_reason": "unclear",
-            "exa_scrape_success": False,
-            "scoring_failed": True,
-        }
-```
-
-**Slow path:** Website exists but has no cached score. Calls the full Exa → OpenAI pipeline via `score_website()`. If any exception occurs (network timeout, API rate limit, malformed response), it is caught and a synthetic zero-score result is created with `scoring_failed: True`. The rationale stores the first 200 characters of the error message for debugging. The `scoring_failed` flag is critical — it causes this contact to still be inserted (see filter logic below) so the user can see it failed and retry.
-
-```python
-    if website not in existing_scores:
-        existing_scores[website] = score_data
-```
-
-Caches the newly computed score so that if another row in this import shares the same website, it will hit the fast path instead of calling the APIs again.
-
-```python
-else:
-    score_data = {
-        "score": 0,
-        "company_type": "rejected",
-        "rationale": "No website provided",
-        "rejection_reason": "unclear",
-        "exa_scrape_success": False,
-        "scoring_failed": False,
-    }
-```
-
-**No-website path:** The row has no website URL at all. It receives a zero score and will be discarded (since `scoring_failed` is `False`, the filter below will exclude it).
-
-```python
-score_val = score_data.get("score", 0)
-is_failed = score_data.get("scoring_failed", False)
-
-if score_val > 0 or is_failed:
-    contact = {**row, **score_data, "import_batch_id": batch_id}
-    contacts_to_insert.append(contact)
-    stored += 1
-else:
-    discarded += 1
-```
-
-The filtering decision. A contact is inserted if **either**: (a) the score is greater than 0 (the company qualifies), or (b) scoring failed (`is_failed` is `True`), because failed contacts should be visible in the UI for manual review or retry. Contacts with score = 0 and no failure are discarded — they represent companies that the AI determined are not industrial distributors. The contact dict is built by merging the mapped CSV row with the score data and tagging it with `import_batch_id`. Phone enrichment is only queued for contacts scoring >= `ENRICHMENT_MIN_SCORE` (50) that lack a mobile phone — this prevents wasting Apollo credits on low-confidence leads.
-
-```python
-if contacts_to_insert:
-    contact_repo.create_contacts_batch(db, contacts_to_insert)
-```
-
-Bulk-inserts all qualifying contacts from this chunk into the `contacts` table via the repository.
-
-```python
-import_batch_repo.update_batch(db, batch_id, {
-    "processed_rows": processed,
-    "stored_rows": stored,
-    "discarded_rows": discarded,
-})
-```
-
-Updates the `import_batches` record with current progress counters. The frontend polls this record to show a progress bar or status message.
-
-```python
-import_batch_repo.update_batch(db, batch_id, {"status": "completed"})
-return batch_id
-```
-
-After all chunks are processed, marks the batch as `"completed"` and returns the batch ID to the router.
+- `_render_filtered_csv(fieldnames, rows)` — re-emits rows with the upload's original headers/column order (`csv.DictWriter` with `extrasaction="ignore"`).
+- `_safe_insert_batch(db, contacts)` — bulk insert with row-by-row fallback; returns the successfully inserted rows (with IDs).
+- `_retry_pending_enrichments(db, batch_id)` — enriches `pending_enrichment` contacts from *other* batches; returns `False` when Apollo credits are exhausted.
+- `_enrich_batch(db, inserted, batch_id)` — enriches this chunk's phoneless contacts; returns the count sent, or `-1` on credit exhaustion.
+- `_score_batch(websites_to_score)` — concurrent scoring via thread pool; per-website failures become `scoring_failed` results.
 
 ### `_map_row(row, fieldnames) → dict`
 

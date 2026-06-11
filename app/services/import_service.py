@@ -36,7 +36,9 @@ COLUMN_MAP: dict[str, str] = {
 BATCH_SIZE = 10
 MAX_SCORING_WORKERS = 8
 SCORING_TIMEOUT = 90
-ENRICHMENT_MIN_SCORE = 50
+# Passing floor: 40+ includes adjacent B2B distributors (scored in the 40-49
+# band) so they get enriched and called alongside core industrial distributors.
+ENRICHMENT_MIN_SCORE = 40
 
 _FAILED_SCORE: dict[str, object] = {
     "score": 0,
@@ -50,6 +52,19 @@ _FAILED_SCORE: dict[str, object] = {
 _PHONE_FIELDS = ("mobile_phone", "work_direct_phone", "corporate_phone")
 
 
+def _is_reusable_score(cached: dict | None) -> bool:
+    """Reuse a cached website score only if the company already passed
+    filtering (a distributor at/above the accept floor). Websites that
+    previously failed — rejected or scored below the floor — are re-evaluated
+    under the current prompt instead of inheriting the stale verdict."""
+    if not cached:
+        return False
+    return (
+        cached.get("company_type") == "distributor"
+        and (cached.get("score") or 0) >= ENRICHMENT_MIN_SCORE
+    )
+
+
 def process_csv_upload(
     db: Client,
     file_content: bytes,
@@ -59,9 +74,13 @@ def process_csv_upload(
 ) -> str:
     """Parse CSV, dedupe, score, insert, and enrich contacts in streaming batches.
 
-    Rows whose (first name, last name, LinkedIn URL) match a contact already
-    in the database — or an earlier row in the same file — are skipped before
-    scoring so the same person is never stored or enriched twice.
+    Rows whose (first name, last name, LinkedIn URL) match a live contact
+    already in the database — or an earlier row in the same file — are skipped
+    before scoring so the same person is never stored or enriched twice.
+    Contacts that exist only as rejected/hidden rows are re-evaluated: their
+    website is re-scored under the current prompt, and they are stored again
+    only if the company now passes (cached scores are reused only for
+    companies that already passed filtering).
 
     Each batch of BATCH_SIZE rows is scored, inserted, and enriched before
     moving to the next batch so contacts become callable as fast as possible.
@@ -87,16 +106,18 @@ def process_csv_upload(
     import_batch_repo.update_batch(db, batch_id, {"total_rows": len(rows)})
 
     # Duplicate scan: skip rows whose (first name, last name, LinkedIn URL)
-    # already exists in the database — or earlier in this same CSV — so the
-    # same person is never inserted, scored, or enriched twice.
-    existing_keys = contact_repo.get_existing_identity_keys(db)
+    # already exists as a live contact — or earlier in this same CSV — so the
+    # same person is never inserted, scored, or enriched twice. Identities
+    # that exist ONLY as rejected/hidden contacts are kept so their company
+    # can be re-evaluated under the current scoring prompt.
+    passing_keys, failed_only_keys = contact_repo.get_existing_identity_keys(db)
     seen_keys: set[tuple[str, str, str]] = set()
     deduped_rows: list[dict[str, Any]] = []
     deduped_raw_rows: list[dict[str, Any]] = []
     duplicate_raw_rows: list[dict[str, Any]] = []
     for raw_row, row in zip(raw_rows, rows):
         key = contact_repo.contact_identity_key(row)
-        if key and (key in existing_keys or key in seen_keys):
+        if key and (key in passing_keys or key in seen_keys):
             duplicate_raw_rows.append(raw_row)
             continue
         if key:
@@ -131,8 +152,7 @@ def process_csv_upload(
             w = row.get("website", "")
             if not w or w in to_score:
                 continue
-            cached = scored_cache.get(w)
-            if not cached or cached.get("company_type") != "distributor":
+            if not _is_reusable_score(scored_cache.get(w)):
                 to_score[w] = {
                     "company_name": row.get("company_name", ""),
                     "job_title": row.get("title", ""),
@@ -154,6 +174,17 @@ def process_csv_upload(
 
             score_val = score_data.get("score", 0)
             is_failed = score_data.get("scoring_failed", False)
+
+            # Re-evaluated contact (already stored as rejected/hidden) whose
+            # company still fails: don't store a second rejected copy.
+            key = contact_repo.contact_identity_key(row)
+            if (
+                key in failed_only_keys
+                and score_data.get("company_type") == "rejected"
+            ):
+                discarded += 1
+                discarded_raw_rows.append(raw_row)
+                continue
 
             if score_val > 0 or is_failed:
                 contact = {**row, **score_data, "import_batch_id": batch_id}

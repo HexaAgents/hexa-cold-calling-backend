@@ -118,26 +118,38 @@ def contact_identity_key(row: dict) -> tuple[str, str, str] | None:
 _IDENTITY_PAGE = 1000
 
 
-def get_existing_identity_keys(db: Client) -> set[tuple[str, str, str]]:
-    """Return identity keys for every contact already in the database."""
-    keys: set[tuple[str, str, str]] = set()
+def get_existing_identity_keys(
+    db: Client,
+) -> tuple[set[tuple[str, str, str]], set[tuple[str, str, str]]]:
+    """Return (passing_keys, failed_only_keys) for contacts in the database.
+
+    passing_keys: identities with at least one live contact (not rejected,
+    not hidden) — imports must never re-insert or re-enrich these.
+    failed_only_keys: identities that exist ONLY as rejected/hidden contacts —
+    imports may re-evaluate these under the current scoring prompt.
+    """
+    passing: set[tuple[str, str, str]] = set()
+    all_keys: set[tuple[str, str, str]] = set()
     offset = 0
     while True:
         result = (
             db.table("contacts")
-            .select("first_name, last_name, person_linkedin_url")
+            .select("first_name, last_name, person_linkedin_url, company_type, hidden")
             .range(offset, offset + _IDENTITY_PAGE - 1)
             .execute()
         )
         rows = result.data or []
         for row in rows:
             key = contact_identity_key(row)
-            if key:
-                keys.add(key)
+            if not key:
+                continue
+            all_keys.add(key)
+            if row.get("company_type") != "rejected" and not row.get("hidden"):
+                passing.add(key)
         if len(rows) < _IDENTITY_PAGE:
             break
         offset += _IDENTITY_PAGE
-    return keys
+    return passing, all_keys - passing
 
 
 _SCORE_FIELDS = "website, score, company_type, rationale, rejection_reason, exa_scrape_success, company_description"
@@ -160,9 +172,23 @@ def get_existing_scores(db: Client, websites: list[str]) -> dict[str, dict]:
         )
         for row in result.data or []:
             w = row.get("website")
-            if w and w not in scores:
+            if not w:
+                continue
+            # A website can have both old rejected rows and a newer passing
+            # row (re-evaluated companies). Keep the best verdict so imports
+            # don't re-score companies that have already passed filtering.
+            current = scores.get(w)
+            if current is None or _score_row_rank(row) > _score_row_rank(current):
                 scores[w] = row
     return scores
+
+
+def _score_row_rank(row: dict) -> tuple[int, int]:
+    """Prefer distributor rows over rejected ones, then higher scores."""
+    return (
+        1 if row.get("company_type") == "distributor" else 0,
+        row.get("score") or 0,
+    )
 
 
 def release_stale_claims(db: Client) -> int:

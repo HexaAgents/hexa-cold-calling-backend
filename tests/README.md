@@ -9,8 +9,11 @@ tests/
 │   ├── test_call_service.py              # Call logging, retry/callback, SMS threshold
 │   ├── test_contact_service.py           # Contact CRUD delegation
 │   ├── test_contact_schema.py            # ContactOut resilience (NULLs, extra columns)
-│   ├── test_import_service.py            # CSV parsing, scoring, batch insert
+│   ├── test_import_service.py            # CSV parsing, dedupe, scoring, cache reuse, enrichment cutoff, CSV exports
+│   ├── test_contact_repo.py              # Identity keys (passing/failed split), cached-score best-verdict lookup
+│   ├── test_import_batch_repo.py         # Lightweight CSV flag queries, unbounded batch history
 │   ├── test_scoring_service.py           # AI scoring pipeline (Exa + OpenAI)
+│   ├── test_reactivation_service.py      # Refeed: DB-only re-queue of stale didn't-pick-up contacts
 │   ├── test_sms_service.py              # SMS template rendering
 │   ├── test_openai_scorer.py            # OpenAI response parsing
 │   ├── test_apollo_service.py           # Apollo enrichment helpers
@@ -21,6 +24,7 @@ tests/
 │   ├── test_email_repo.py              # Gmail tokens + email logs CRUD
 │   ├── test_email_tracking_repo.py      # Tracked emails upsert, summary, thread
 │   ├── test_email_tracking_service.py   # Gmail sync, header parsing, user-level sync
+│   ├── test_scheduled_call_repo.py      # Scheduled calls CRUD and due-call queries
 │   ├── test_companies_repo.py           # Company grouping, search, contacts by company
 │   ├── test_todo_repo.py                # To-Do assignee normalization and legacy field mirroring
 │   └── test_todo_schema.py              # To-Do schemas: title-only create, optional fields, multi-assignees
@@ -30,7 +34,7 @@ tests/
     ├── test_contacts_routes.py           # Contact CRUD + search + phone delete
     ├── test_calls_routes.py              # Call logging, claim, release, queue, callback_date
     ├── test_settings_routes.py           # Settings GET/PUT including retry_days
-    ├── test_imports_routes.py            # CSV upload, batch status, recent imports
+    ├── test_imports_routes.py            # CSV upload, batch status, recent imports, input/filtered/discarded CSV downloads
     ├── test_twilio_routes.py             # Voice TwiML + status webhook
     ├── test_sms_routes.py               # Send/schedule SMS
     ├── test_notes_routes.py             # Notes CRUD

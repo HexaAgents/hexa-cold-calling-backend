@@ -22,34 +22,43 @@ The pipeline has three stages:
 
 ## prompts.py
 
-### `SYSTEM_PROMPT` (lines 1-48)
+### `SYSTEM_PROMPT`
 
 A single multi-line string that defines the LLM's entire scoring persona and rules. This is the most business-critical piece of text in the application — changing a single sentence here changes how every lead is scored.
 
-**Lines 2-3 — Identity:** Establishes the LLM as a "B2B lead qualification assistant for Hexa" and describes what Hexa does (AI automation for industrial distributors — procurement, quoting, order entry, AP/AR, invoice matching, vendor management, customer service with ERP integration).
+**Identity:** Establishes the LLM as a "B2B lead qualification assistant for Hexa" and describes what Hexa does (AI automation for industrial distributors — procurement, quoting, order entry, AP/AR, invoice matching, vendor management, customer service with ERP integration).
 
-**Lines 6-9 — ACCEPT rules:** A single category of companies that are potential customers:
-- **Industrial distributors** — companies whose primary business is distributing, supplying, or reselling physical industrial products. The prompt lists a comprehensive but non-exhaustive set of product categories (electrical supplies, PVF, HVAC, MRO, safety/PPE, fasteners, bearings, power transmission, cutting tools, fluid power, janitorial, welding, adhesives, industrial gases, building materials, packaging, material handling, pumps, motors, filtration, lab supplies).
+**Critical distinction:** Companies that sell software/SaaS/services *to* distributors are vendors, not distributors — they must be rejected (`distributor_facing_vendor`) and never scored above 29, even if their copy is full of distribution language.
 
-**Lines 11-24 — REJECT rules with labels:**
-- `"manufacturer"` — companies whose primary business is manufacturing, producing, or assembling physical products. Even if they also distribute, if manufacturing is their core identity, they are rejected.
-- `"wholesaler"` — pure wholesalers of non-industrial goods (food, consumer, fashion, agricultural). Companies that distribute industrial products are classified as distributors even if they call themselves wholesalers.
-- `"service_provider"` — consulting, staffing, marketing, law, accounting, IT services, managed services, engineering services, logistics-only (3PLs without inventory), cleaning, construction contractors, repair/maintenance, installation contractors.
+**ACCEPT rules — two tiers:**
+- **Industrial distributors (50-100)** — companies whose primary business is distributing, supplying, or reselling physical industrial products. The prompt lists a comprehensive but non-exhaustive set of product categories (electrical supplies, PVF, HVAC, MRO, safety/PPE, fasteners, bearings, power transmission, cutting tools, fluid power, janitorial, welding, adhesives, industrial gases, building materials, packaging, material handling, pumps, motors, filtration, lab supplies). Selling to contractors, builders, municipalities, and trade customers counts as B2B; mixed B2B/retail channels are acceptable.
+- **Adjacent B2B distributors/dealers (40-49, default 45)** — physical-goods resellers with a meaningful B2B share and likely RFQ/PO volume that are not classic industrial MRO distributors: building materials/lumber/stone to contractors, lighting/lamp wholesalers with commercial accounts, appliance/builder-product distributors, ranch & ag supply (pipe, gates, panels), waterworks supply, and new/used machinery dealers. B2B does not need to be exclusive. These keep `company_type = "distributor"` and `rejection_reason = null`, and the dedicated 40-49 band makes them filterable later.
+
+**REJECT rules with labels** (each sets `company_type = "rejected"`):
+- `"non_industrial_distributor"` — distributors of non-industrial consumer goods (food/beverage, alcohol, pharma, consumer electronics, fashion, cosmetics, media, promo products, pet supplies). EXCEPTION: a meaningful trade/B2B channel moves the company to the adjacent 40-49 band instead.
+- `"manufacturer"` — companies whose core identity is manufacturing. EXCEPTIONS: distributors that also fabricate/private-label stay distributors; new/used machinery *dealers* (buy and resell, don't produce) go to the adjacent band.
+- `"manufacturers_rep"` — commission-based rep agencies that don't own inventory.
+- `"fuel_distributor"` — gasoline/diesel/propane/heating-oil distribution (industrial lubricants within a broader MRO catalog still accepted).
+- `"wholesaler"` — pure non-industrial wholesalers and second-tier redistribution warehouses that sell to other distributors. EXCEPTION: lighting/electrical, building products, and ag/ranch supply wholesalers selling to trade belong in the adjacent band.
+- `"service_provider"` — consulting, staffing, marketing, law, accounting, IT services, managed services, engineering services, logistics-only (3PLs without inventory), cleaning, construction contractors, repair/maintenance, installation contractors. EXCEPTION: product-stocking companies stay distributors even with ancillary install/design/appraisal/liquidation services.
 - `"consultancy"` — management consultancies, strategy firms, advisory firms.
 - `"automation_company"` — pure software, SaaS, or consulting for automation (ERP vendors, MES, supply chain SaaS, AI/ML tools). These are competitors, not customers.
-- `"unclear"` — insufficient website text to determine the company's business.
+- `"distributor_facing_vendor"` — vendors whose primary business is selling software/tools to distributors.
+- `"unclear"` — insufficient website text. EXCEPTION: a bare customer login/ordering portal is a B2B signal — scored 30-39 as `distributor` for human review instead.
+- `"data_mismatch"` — the scraped website describes a different company than the input name; score 0.
 
-**Lines 26-38 — Scoring rubric (0-100):**
+**Scoring rubric (0-100):**
 
 | Tier | Score Range | Criteria |
 |---|---|---|
 | Top tier | 90-100 | Clearly an industrial distributor. Contact has an operational/leadership title (VP Ops, COO, CFO, Supply Chain Director, IT Director, GM, Owner, President, Purchasing Manager, Operations Manager, Branch Manager). |
 | Strong fit | 70-89 | Clearly an industrial distributor, but the contact's title is less directly relevant (sales manager, marketing director, project manager, engineer, account manager). |
-| Possible fit | 50-69 | Likely an industrial distributor but the website is ambiguous — the company may do distribution AND other activities. |
-| Human review | 30-49 | Some distributor signals but significant uncertainty. Assigned in this range for human review. |
-| Not a fit | 0-29 | Not an industrial distributor, manufacturer, service provider, software company, or unrelated industry. |
+| Possible fit | 50-69 | Likely an industrial distributor but the website is ambiguous — the company may do distribution AND other activities. Industrial distributors only. |
+| Adjacent distributor | 40-49 (default 45) | Adjacent B2B distributor/dealer per the ALSO ACCEPT rules — real physical-goods reseller with a B2B share, but not a core industrial distributor. `company_type` stays `"distributor"`. |
+| Human review | 30-39 | Some B2B distribution signals but significant uncertainty, sells mainly to other distributors, or the site is only a gated login portal. |
+| Not a fit | 0-29 | Not a distributor: manufacturer, service provider, software company, distributor-facing vendor, or unrelated industry. |
 
-**Lines 40-46 — Output format:** Instructs the LLM to respond with valid JSON only, in the exact format: `score` (int 0-100), `company_type` (distributor|rejected), `rationale` (1-2 sentence explanation), `rejection_reason` (null or one of the six rejection labels), `company_description` (2-sentence sales briefing).
+**Output format:** Instructs the LLM to respond with valid JSON only, in the exact format: `score` (int 0-100), `company_type` (distributor|rejected), `rationale` (1-2 sentence explanation), `rejection_reason` (null or one of the rejection labels), `company_description` (2-sentence sales briefing), `industry_tag` (short NAICS-style label).
 
 ### `USER_MESSAGE_TEMPLATE` (lines 50-55)
 
@@ -235,9 +244,9 @@ Parses and validates the raw JSON string from the LLM. This function is **defens
 
 ## End-to-End Scoring Flow
 
-1. **CSV import triggers scoring** — The import service extracts unique websites from the uploaded CSV and calls `contact_repo.get_existing_scores()` to check for already-scored websites. Only cached scores where `company_type == "distributor"` are trusted; all other cached types force a re-score under the current prompt.
+1. **CSV import triggers scoring** — The import service extracts unique websites from the uploaded CSV and calls `contact_repo.get_existing_scores()` to check for already-scored websites. A cached score is reused only if the company already passed filtering (`company_type == "distributor"` **and** score >= 40); websites that previously failed — rejected, error-scored, or below the floor — are re-evaluated under the current prompt.
 2. **Content extraction** — For each unscored website, `exa_client.fetch_company_info()` fetches website text (direct URL → about pages → search fallback). Text is truncated to 8000 characters.
 3. **LLM scoring** — `openai_scorer.score_company()` sends the system prompt + company data to GPT-4o-mini in JSON mode with temperature 0.2.
 4. **Response validation** — `_parse_response()` validates every field: clamps score to 0-100, checks company_type against `{"distributor", "rejected"}` and rejection_reason against the allowlist, casts rationale to string.
 5. **Storage** — The validated scoring result (`score`, `company_type`, `rationale`, `rejection_reason`, `exa_scrape_success`) is written to the contact row via `contact_repo.create_contacts_batch()`.
-6. **Phone enrichment** — Contacts scoring >= 50 (confirmed distributors) that lack a mobile phone are automatically queued for Apollo enrichment (`enrichment_status = "pending_enrichment"`).
+6. **Phone enrichment** — Contacts scoring >= 40 (confirmed industrial distributors at 50+, plus adjacent B2B distributors in the 40-49 band) that lack a mobile phone are automatically queued for Apollo enrichment (`enrichment_status = "pending_enrichment"`).

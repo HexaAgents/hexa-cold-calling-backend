@@ -97,7 +97,7 @@ def _mock_deps():
     with (
         patch("app.services.import_service.score_website") as mock_score,
         patch("app.repositories.contact_repo.get_existing_scores", return_value={}) as mock_existing,
-        patch("app.repositories.contact_repo.get_existing_identity_keys", return_value=set()) as mock_identity,
+        patch("app.repositories.contact_repo.get_existing_identity_keys", return_value=(set(), set())) as mock_identity,
         patch("app.repositories.contact_repo.create_contacts_batch") as mock_create,
         patch("app.repositories.import_batch_repo.update_batch") as mock_update,
         patch("app.services.import_service.settings") as mock_settings,
@@ -268,9 +268,10 @@ class TestImportDedupe:
         re-inserted, re-scored, or sent to enrichment."""
         from app.services.import_service import process_csv_upload
 
-        _mock_deps["get_existing_identity_keys"].return_value = {
-            ("alice", "smith", "http://www.linkedin.com/in/alice"),
-        }
+        _mock_deps["get_existing_identity_keys"].return_value = (
+            {("alice", "smith", "http://www.linkedin.com/in/alice")},
+            set(),
+        )
         _mock_deps["score_website"].return_value = _good_score(85)
         csv = _csv_bytes(
             "Alice,Smith,http://www.linkedin.com/in/alice,ACME Corp,https://acme.com",
@@ -287,9 +288,10 @@ class TestImportDedupe:
         """Identity matching normalizes case and trailing slashes."""
         from app.services.import_service import process_csv_upload
 
-        _mock_deps["get_existing_identity_keys"].return_value = {
-            ("alice", "smith", "http://www.linkedin.com/in/alice"),
-        }
+        _mock_deps["get_existing_identity_keys"].return_value = (
+            {("alice", "smith", "http://www.linkedin.com/in/alice")},
+            set(),
+        )
         _mock_deps["score_website"].return_value = _good_score(85)
         csv = _csv_bytes(
             "ALICE,Smith,HTTP://www.linkedin.com/in/Alice/,ACME Corp,https://acme.com",
@@ -324,9 +326,10 @@ class TestImportDedupe:
         """A different person (different linkedin) is still imported."""
         from app.services.import_service import process_csv_upload
 
-        _mock_deps["get_existing_identity_keys"].return_value = {
-            ("alice", "smith", "http://www.linkedin.com/in/alice"),
-        }
+        _mock_deps["get_existing_identity_keys"].return_value = (
+            {("alice", "smith", "http://www.linkedin.com/in/alice")},
+            set(),
+        )
         _mock_deps["score_website"].return_value = _good_score(85)
         csv = _csv_bytes(
             "Bob,Jones,http://www.linkedin.com/in/bob,ACME Corp,https://acme.com",
@@ -345,9 +348,10 @@ class TestImportDedupe:
         discarded CSV; the kept row appears in the filtered CSV."""
         from app.services.import_service import process_csv_upload
 
-        _mock_deps["get_existing_identity_keys"].return_value = {
-            ("alice", "smith", "http://www.linkedin.com/in/alice"),
-        }
+        _mock_deps["get_existing_identity_keys"].return_value = (
+            {("alice", "smith", "http://www.linkedin.com/in/alice")},
+            set(),
+        )
         _mock_deps["score_website"].return_value = _good_score(85)
         csv = _csv_bytes(
             "Alice,Smith,http://www.linkedin.com/in/alice,ACME Corp,https://acme.com",
@@ -372,9 +376,10 @@ class TestImportDedupe:
         though the insert loop never runs."""
         from app.services.import_service import process_csv_upload
 
-        _mock_deps["get_existing_identity_keys"].return_value = {
-            ("alice", "smith", "http://www.linkedin.com/in/alice"),
-        }
+        _mock_deps["get_existing_identity_keys"].return_value = (
+            {("alice", "smith", "http://www.linkedin.com/in/alice")},
+            set(),
+        )
         csv = _csv_bytes(
             "Alice,Smith,http://www.linkedin.com/in/alice,ACME Corp,https://acme.com",
             headers=PERSON_HEADERS,
@@ -408,6 +413,177 @@ class TestImportDedupe:
         for c in _mock_deps["create_contacts_batch"].call_args_list:
             all_contacts.extend(c[0][1])
         assert len(all_contacts) == 2
+
+
+# ---------------------------------------------------------------------------
+# Cached score reuse / re-scoring of previously failed websites
+# ---------------------------------------------------------------------------
+
+
+def _rejected_score(score=10, reason="non_industrial_distributor"):
+    return {
+        "score": score,
+        "company_type": "rejected",
+        "rationale": "Not a fit",
+        "rejection_reason": reason,
+        "exa_scrape_success": True,
+        "scoring_failed": False,
+    }
+
+
+class TestIsReusableScore:
+    """Unit tests for the cache-reuse policy itself."""
+
+    def test_none_is_not_reusable(self):
+        from app.services.import_service import _is_reusable_score
+        assert _is_reusable_score(None) is False
+
+    def test_passing_distributor_is_reusable(self):
+        from app.services.import_service import _is_reusable_score
+        assert _is_reusable_score({"company_type": "distributor", "score": 50}) is True
+
+    def test_adjacent_band_is_reusable(self):
+        from app.services.import_service import _is_reusable_score
+        assert _is_reusable_score({"company_type": "distributor", "score": 40}) is True
+
+    def test_distributor_below_floor_not_reusable(self):
+        from app.services.import_service import _is_reusable_score
+        assert _is_reusable_score({"company_type": "distributor", "score": 39}) is False
+
+    def test_rejected_not_reusable_even_with_high_score(self):
+        from app.services.import_service import _is_reusable_score
+        assert _is_reusable_score({"company_type": "rejected", "score": 95}) is False
+
+    def test_null_score_not_reusable(self):
+        from app.services.import_service import _is_reusable_score
+        assert _is_reusable_score({"company_type": "distributor", "score": None}) is False
+
+
+class TestRescorePreviouslyFailed:
+    def test_cached_rejected_website_is_rescored(self, _mock_deps):
+        """A website that failed scoring before is re-evaluated on re-import."""
+        from app.services.import_service import process_csv_upload
+
+        _mock_deps["get_existing_scores"].return_value = {
+            "https://acme.com": _rejected_score(10),
+        }
+        _mock_deps["score_website"].return_value = _good_score(85)
+        csv = _csv_bytes("ACME Corp,https://acme.com")
+        db = MagicMock()
+
+        process_csv_upload(db, csv, "test.csv", "user-1", "batch-1")
+
+        _mock_deps["score_website"].assert_called_once()
+        contacts = _mock_deps["create_contacts_batch"].call_args[0][1]
+        assert contacts[0]["score"] == 85
+
+    def test_cached_adjacent_distributor_45_is_reused(self, _mock_deps):
+        """Adjacent distributors (40-49) already passed filtering: no re-score."""
+        from app.services.import_service import process_csv_upload
+
+        _mock_deps["get_existing_scores"].return_value = {
+            "https://acme.com": _good_score(45),
+        }
+        csv = _csv_bytes("ACME Corp,https://acme.com")
+        db = MagicMock()
+
+        process_csv_upload(db, csv, "test.csv", "user-1", "batch-1")
+
+        _mock_deps["score_website"].assert_not_called()
+        contacts = _mock_deps["create_contacts_batch"].call_args[0][1]
+        assert contacts[0]["score"] == 45
+
+    def test_cached_distributor_below_floor_is_rescored(self, _mock_deps):
+        """A distributor cached below the 40 floor did not pass: re-evaluate."""
+        from app.services.import_service import process_csv_upload
+
+        _mock_deps["get_existing_scores"].return_value = {
+            "https://acme.com": _good_score(30),
+        }
+        _mock_deps["score_website"].return_value = _good_score(45)
+        csv = _csv_bytes("ACME Corp,https://acme.com")
+        db = MagicMock()
+
+        process_csv_upload(db, csv, "test.csv", "user-1", "batch-1")
+
+        _mock_deps["score_website"].assert_called_once()
+        contacts = _mock_deps["create_contacts_batch"].call_args[0][1]
+        assert contacts[0]["score"] == 45
+
+    def test_rejected_only_contact_reimported_when_company_now_passes(self, _mock_deps):
+        """A contact stored only as rejected/hidden is re-evaluated and stored
+        again when its company passes under the current prompt."""
+        from app.services.import_service import process_csv_upload
+
+        _mock_deps["get_existing_identity_keys"].return_value = (
+            set(),
+            {("alice", "smith", "http://www.linkedin.com/in/alice")},
+        )
+        _mock_deps["score_website"].return_value = _good_score(45)
+        csv = _csv_bytes(
+            "Alice,Smith,http://www.linkedin.com/in/alice,ACME Corp,https://acme.com",
+            headers=PERSON_HEADERS,
+        )
+        db = MagicMock()
+
+        process_csv_upload(db, csv, "test.csv", "user-1", "batch-1")
+
+        contacts = _mock_deps["create_contacts_batch"].call_args[0][1]
+        assert len(contacts) == 1
+        assert contacts[0]["first_name"] == "Alice"
+        assert contacts[0]["score"] == 45
+
+    def test_rejected_only_contact_not_duplicated_when_still_failing(self, _mock_deps):
+        """If the company is rejected again, the contact is NOT stored a second
+        time (it already exists as a rejected/hidden row)."""
+        from app.services.import_service import process_csv_upload
+
+        _mock_deps["get_existing_identity_keys"].return_value = (
+            set(),
+            {("alice", "smith", "http://www.linkedin.com/in/alice")},
+        )
+        _mock_deps["score_website"].return_value = _rejected_score(10)
+        csv = _csv_bytes(
+            "Alice,Smith,http://www.linkedin.com/in/alice,ACME Corp,https://acme.com",
+            headers=PERSON_HEADERS,
+        )
+        db = MagicMock()
+
+        process_csv_upload(db, csv, "test.csv", "user-1", "batch-1")
+
+        _mock_deps["score_website"].assert_called_once()
+        _mock_deps["create_contacts_batch"].assert_not_called()
+        final = _mock_deps["update_batch"].call_args_list[-1][0][2]
+        assert final["status"] == "completed"
+        assert final["discarded_rows"] == 1
+
+
+class TestEnrichmentCutoff:
+    def test_score_45_marks_pending_enrichment(self, _mock_deps):
+        """Adjacent distributors (40-49) now pass the enrichment cutoff."""
+        from app.services.import_service import process_csv_upload
+
+        _mock_deps["score_website"].return_value = _good_score(45)
+        csv = _csv_bytes("ACME Corp,https://acme.com")
+        db = MagicMock()
+
+        process_csv_upload(db, csv, "test.csv", "user-1", "batch-1")
+
+        contacts = _mock_deps["create_contacts_batch"].call_args[0][1]
+        assert contacts[0]["enrichment_status"] == "pending_enrichment"
+
+    def test_score_below_40_not_enriched(self, _mock_deps):
+        """Below the 40 floor the contact is stored but not sent to Apollo."""
+        from app.services.import_service import process_csv_upload
+
+        _mock_deps["score_website"].return_value = _good_score(35)
+        csv = _csv_bytes("ACME Corp,https://acme.com")
+        db = MagicMock()
+
+        process_csv_upload(db, csv, "test.csv", "user-1", "batch-1")
+
+        contacts = _mock_deps["create_contacts_batch"].call_args[0][1]
+        assert "enrichment_status" not in contacts[0]
 
 
 # ---------------------------------------------------------------------------
