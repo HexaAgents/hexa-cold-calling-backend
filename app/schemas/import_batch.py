@@ -15,6 +15,7 @@ class ImportBatchOut(BaseModel):
     enriched_rows: int = 0
     enrichment_error: str | None = None
     status: str
+    has_input_csv: bool = False
     has_filtered_csv: bool = False
     has_discarded_csv: bool = False
     created_at: datetime | None = None

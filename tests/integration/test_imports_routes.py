@@ -39,6 +39,20 @@ class TestUploadCSV:
         assert body["total_rows"] == 1
         assert body["status"] == "processing"
 
+    def test_upload_stores_input_csv(self, client, mock_supabase):
+        mock_supabase.table.return_value \
+            .insert.return_value \
+            .execute.return_value = _make_execute_result([SAMPLE_BATCH])
+
+        csv_bytes = b"Company Name\nACME Corp"
+        resp = client.post(
+            "/imports/upload",
+            files={"file": ("leads.csv", csv_bytes, "text/csv")},
+        )
+        assert resp.status_code == 200
+        inserted = mock_supabase.table.return_value.insert.call_args[0][0]
+        assert inserted["input_csv"] == csv_bytes.decode("utf-8")
+
     def test_upload_non_csv(self, client, mock_supabase):
         resp = client.post(
             "/imports/upload",
@@ -67,8 +81,8 @@ class TestRecentImports:
             imports_router.import_batch_repo,
             "get_recent_batches",
             lambda db: [
-                {**SAMPLE_BATCH, "has_filtered_csv": True},
-                {**second, "has_filtered_csv": False},
+                {**SAMPLE_BATCH, "has_filtered_csv": True, "has_input_csv": True},
+                {**second, "has_filtered_csv": False, "has_input_csv": False},
             ],
         )
 
@@ -78,8 +92,10 @@ class TestRecentImports:
         assert len(body) == 2
         assert body[0]["id"] == "batch-1"
         assert body[0]["has_filtered_csv"] is True
+        assert body[0]["has_input_csv"] is True
         assert body[1]["filename"] == "second.csv"
         assert body[1]["has_filtered_csv"] is False
+        assert body[1]["has_input_csv"] is False
 
     def test_get_recent_imports_empty(self, client, mock_supabase, monkeypatch):
         from app.routers import imports as imports_router
@@ -152,6 +168,39 @@ class TestDeleteImportBatch:
         resp = client.delete("/imports/nonexistent")
         assert resp.status_code == 404
         assert resp.json()["detail"] == "Import batch not found"
+
+
+class TestDownloadInputCsv:
+    def test_download_returns_csv_with_attachment_name(
+        self, client, mock_supabase, monkeypatch,
+    ):
+        from app.routers import imports as imports_router
+
+        csv_text = "Company Name,Website\r\nACME Corp,https://acme.com\r\n"
+        monkeypatch.setattr(
+            imports_router.import_batch_repo,
+            "get_input_csv",
+            lambda db, batch_id: (csv_text, "leads.csv"),
+        )
+
+        resp = client.get("/imports/batch-1/input-csv")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/csv")
+        assert "leads.input.csv" in resp.headers["content-disposition"]
+        assert resp.text == csv_text
+
+    def test_download_missing_returns_404(self, client, mock_supabase, monkeypatch):
+        from app.routers import imports as imports_router
+
+        monkeypatch.setattr(
+            imports_router.import_batch_repo,
+            "get_input_csv",
+            lambda db, batch_id: None,
+        )
+
+        resp = client.get("/imports/batch-1/input-csv")
+        assert resp.status_code == 404
+        assert "not available" in resp.json()["detail"].lower()
 
 
 class TestDownloadFilteredCsv:

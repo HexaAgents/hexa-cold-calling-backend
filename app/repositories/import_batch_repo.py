@@ -10,8 +10,8 @@ logger = logging.getLogger(__name__)
 STALE_THRESHOLD_MINUTES = 10
 
 # Lightweight column list used by list/get queries. We deliberately omit
-# `filtered_csv` / `discarded_csv` (each potentially several MB) and instead
-# surface booleans via `_with_csv_flag` so the API can advertise
+# `input_csv` / `filtered_csv` / `discarded_csv` (each potentially several MB)
+# and instead surface booleans via the flag helpers so the API can advertise
 # downloadability without shipping the file payloads on every poll.
 _LIGHT_COLUMNS = (
     "id, user_id, filename, total_rows, processed_rows, stored_rows, "
@@ -19,42 +19,42 @@ _LIGHT_COLUMNS = (
     "updated_at"
 )
 
+# CSV column -> batch flag advertised through the API.
+_CSV_FLAGS = {
+    "input_csv": "has_input_csv",
+    "filtered_csv": "has_filtered_csv",
+    "discarded_csv": "has_discarded_csv",
+}
+
+
+def _attach_csv_flags(db: Client, batches: list[dict]) -> list[dict]:
+    """Set has_*_csv flags without fetching the CSV payloads themselves.
+
+    One id-only query per CSV column (non-null rows) instead of selecting the
+    full text content, so polling the batch list stays cheap.
+    """
+    if not batches:
+        return batches
+    ids = [b["id"] for b in batches]
+    for column, flag in _CSV_FLAGS.items():
+        result = (
+            db.table("import_batches")
+            .select("id")
+            .in_("id", ids)
+            .not_.is_(column, "null")
+            .execute()
+        )
+        present = {r["id"] for r in (result.data or [])}
+        for b in batches:
+            b[flag] = b["id"] in present
+    return batches
+
 
 def _with_csv_flag(db: Client, batch: dict | None) -> dict | None:
     if not batch:
         return batch
-    result = (
-        db.table("import_batches")
-        .select("filtered_csv, discarded_csv")
-        .eq("id", batch["id"])
-        .single()
-        .execute()
-    )
-    row = result.data or {}
-    batch["has_filtered_csv"] = bool(row.get("filtered_csv"))
-    batch["has_discarded_csv"] = bool(row.get("discarded_csv"))
+    _attach_csv_flags(db, [batch])
     return batch
-
-
-def _attach_csv_flags(db: Client, batches: list[dict]) -> list[dict]:
-    if not batches:
-        return batches
-    ids = [b["id"] for b in batches]
-    result = (
-        db.table("import_batches")
-        .select("id, filtered_csv, discarded_csv")
-        .in_("id", ids)
-        .execute()
-    )
-    presence = {
-        r["id"]: (bool(r.get("filtered_csv")), bool(r.get("discarded_csv")))
-        for r in (result.data or [])
-    }
-    for b in batches:
-        has_filtered, has_discarded = presence.get(b["id"], (False, False))
-        b["has_filtered_csv"] = has_filtered
-        b["has_discarded_csv"] = has_discarded
-    return batches
 
 
 def create_batch(db: Client, data: dict) -> dict:
@@ -83,12 +83,12 @@ def get_batch(db: Client, batch_id: str) -> dict | None:
     return _with_csv_flag(db, result.data)
 
 
-def get_recent_batches(db: Client, limit: int = 10) -> list[dict]:
+def get_recent_batches(db: Client) -> list[dict]:
+    """Return the full import history, newest first."""
     result = (
         db.table("import_batches")
         .select(_LIGHT_COLUMNS)
         .order("created_at", desc=True)
-        .limit(limit)
         .execute()
     )
     return _attach_csv_flags(db, result.data or [])
@@ -113,6 +113,11 @@ def _get_csv_column(
     if not csv_text:
         return None
     return csv_text, row.get("filename") or default_filename
+
+
+def get_input_csv(db: Client, batch_id: str) -> tuple[str, str] | None:
+    """Return (csv_text, original_filename) for the original upload, or None."""
+    return _get_csv_column(db, batch_id, "input_csv", "input.csv")
 
 
 def get_filtered_csv(db: Client, batch_id: str) -> tuple[str, str] | None:

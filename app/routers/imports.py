@@ -64,6 +64,8 @@ async def upload_csv(
         "filename": file.filename,
         "total_rows": total_rows,
         "status": "processing",
+        # Keep the original upload so it can be re-downloaded later.
+        "input_csv": content.decode("utf-8-sig", errors="replace"),
     })
 
     background_tasks.add_task(_run_import, batch["id"], content, file.filename, current_user["id"])
@@ -100,6 +102,30 @@ def delete_import_batch(batch_id: str, current_user: CurrentUserDep, db: Supabas
     deleted_count = contact_repo.delete_contacts_by_batch(db, batch_id)
     import_batch_repo.delete_batch(db, batch_id)
     return {"deleted_contacts": deleted_count, "batch_id": batch_id}
+
+
+@router.get("/{batch_id}/input-csv")
+def download_input_csv(
+    batch_id: str,
+    current_user: CurrentUserDep,
+    db: SupabaseDep,
+):
+    """Stream the original uploaded CSV exactly as it was received."""
+    result = import_batch_repo.get_input_csv(db, batch_id)
+    if not result:
+        raise HTTPException(
+            status_code=404,
+            detail="Input CSV not available for this import",
+        )
+    csv_text, original_filename = result
+    download_name = _suffixed_download_filename(original_filename, "input")
+    return Response(
+        content=csv_text,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="{download_name}"',
+        },
+    )
 
 
 @router.get("/{batch_id}/filtered-csv")
