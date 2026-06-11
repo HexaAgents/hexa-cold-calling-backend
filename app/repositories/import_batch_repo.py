@@ -31,20 +31,26 @@ def _attach_csv_flags(db: Client, batches: list[dict]) -> list[dict]:
     """Set has_*_csv flags without fetching the CSV payloads themselves.
 
     One id-only query per CSV column (non-null rows) instead of selecting the
-    full text content, so polling the batch list stays cheap.
+    full text content, so polling the batch list stays cheap. A missing
+    column (unapplied migration) downgrades to flag=False instead of failing
+    the whole batch list.
     """
     if not batches:
         return batches
     ids = [b["id"] for b in batches]
     for column, flag in _CSV_FLAGS.items():
-        result = (
-            db.table("import_batches")
-            .select("id")
-            .in_("id", ids)
-            .not_.is_(column, "null")
-            .execute()
-        )
-        present = {r["id"] for r in (result.data or [])}
+        present: set[str] = set()
+        try:
+            result = (
+                db.table("import_batches")
+                .select("id")
+                .in_("id", ids)
+                .not_.is_(column, "null")
+                .execute()
+            )
+            present = {r["id"] for r in (result.data or [])}
+        except Exception as exc:
+            logger.warning("CSV flag query failed for %s (migration missing?): %s", column, exc)
         for b in batches:
             b[flag] = b["id"] in present
     return batches
