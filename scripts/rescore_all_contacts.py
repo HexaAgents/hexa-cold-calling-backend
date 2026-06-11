@@ -17,6 +17,12 @@ Usage (from repo root, with .env loaded):
 
 Options:
     --dry-run          Print contact / website counts and outcome histogram only.
+    --rejected-only    Only rescore contacts whose company_type is 'rejected'.
+                       Websites that already carry a passing verdict (distributor
+                       scoring >= ENRICHMENT_MIN_SCORE on another contact) reuse
+                       that verdict instead of re-calling Exa/OpenAI. Contacts
+                       whose company now passes are unhidden and, if phoneless,
+                       marked pending_enrichment.
     --skip-migrate     Do not run SQL migrations (rescore only).
     --migrate-only     Run SQL migration(s) only; verify call_logs counts unchanged; exit.
     --migration PATH   SQL file to run (repeatable). Default: migrations/022_add_bad_number_outcome.sql
@@ -44,8 +50,12 @@ load_dotenv(ROOT / ".env")
 from supabase import create_client  # noqa: E402
 
 from app.config import settings  # noqa: E402
-from app.repositories.contact_repo import update_contact  # noqa: E402
-from app.services.import_service import SCORING_TIMEOUT  # noqa: E402
+from app.repositories.contact_repo import get_existing_scores, update_contact  # noqa: E402
+from app.services.import_service import (  # noqa: E402
+    ENRICHMENT_MIN_SCORE,
+    SCORING_TIMEOUT,
+    _is_reusable_score,
+)
 from app.services.scoring_service import score_website  # noqa: E402
 
 logger = logging.getLogger("rescore")
@@ -99,17 +109,18 @@ def _run_sql_files(paths: list[Path]) -> None:
                 cur.execute(sql)
 
 
-def _fetch_contacts_with_website(db) -> list[dict]:
+def _fetch_contacts_with_website(db, rejected_only: bool = False) -> list[dict]:
     rows: list[dict] = []
     offset = 0
     while True:
-        res = (
+        query = (
             db.table("contacts")
-            .select("id,website,company_name,title")
+            .select("id,website,company_name,title,mobile_phone")
             .not_.is_("website", "null")
-            .range(offset, offset + PAGE_SIZE - 1)
-            .execute()
         )
+        if rejected_only:
+            query = query.eq("company_type", "rejected")
+        res = query.range(offset, offset + PAGE_SIZE - 1).execute()
         batch = res.data or []
         if not batch:
             break
@@ -157,6 +168,11 @@ def _score_one_website(website: str, company_name: str, job_title: str) -> tuple
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dry-run", action="store_true", help="Only print stats and exit")
+    parser.add_argument(
+        "--rejected-only",
+        action="store_true",
+        help="Only rescore contacts with company_type='rejected' (reuses passing verdicts)",
+    )
     parser.add_argument("--skip-migrate", action="store_true", help="Skip SQL migrations")
     parser.add_argument(
         "--migrate-only",
@@ -180,9 +196,14 @@ def main() -> None:
     before_hist = _outcome_histogram(db)
     logger.info("call_logs snapshot: %s", before_hist)
 
-    contacts = _fetch_contacts_with_website(db)
+    contacts = _fetch_contacts_with_website(db, rejected_only=args.rejected_only)
     by_site = _group_by_website(contacts)
-    logger.info("Contacts with website: %s rows, %s distinct websites", len(contacts), len(by_site))
+    logger.info(
+        "Contacts to rescore%s: %s rows, %s distinct websites",
+        " (rejected only)" if args.rejected_only else "",
+        len(contacts),
+        len(by_site),
+    )
 
     if args.dry_run:
         logger.info("Dry run — no migration or rescore.")
@@ -227,9 +248,27 @@ def main() -> None:
     if not settings.exa_api_key or not settings.openai_api_key:
         raise SystemExit("Set EXA_API_KEY and OPENAI_API_KEY for rescoring")
 
-    # Re-score each distinct website; apply result to every contact on that site.
+    # In rejected-only mode, a website may already carry a passing verdict from
+    # another (live) contact. Reuse it instead of re-calling Exa/OpenAI, same
+    # policy as the CSV import cache.
+    scores_by_website: dict[str, dict] = {}
+    if args.rejected_only:
+        cached = get_existing_scores(db, list(by_site.keys()))
+        for website, data in cached.items():
+            if _is_reusable_score(data):
+                scores_by_website[website] = data
+        if scores_by_website:
+            logger.info(
+                "Reusing %s existing passing verdicts (no API calls)",
+                len(scores_by_website),
+            )
+
+    # Re-score each remaining distinct website; apply result to every contact
+    # on that site.
     work: list[tuple[str, str, str]] = []
     for website, group in by_site.items():
+        if website in scores_by_website:
+            continue
         rep = group[0]
         work.append(
             (
@@ -238,8 +277,7 @@ def main() -> None:
                 (rep.get("title") or "").strip(),
             )
         )
-
-    scores_by_website: dict[str, dict] = {}
+    logger.info("Websites to score via Exa/OpenAI: %s", len(work))
     with ThreadPoolExecutor(max_workers=RESCORE_WORKERS) as ex:
         futures = {ex.submit(_score_one_website, w, cn, jt): w for w, cn, jt in work}
         for fut in as_completed(futures):
@@ -262,12 +300,16 @@ def main() -> None:
             time.sleep(0.05)
 
     updated = 0
+    now_passing = 0
+    queued_enrichment = 0
     for website, group in by_site.items():
         data = scores_by_website.get(website)
         if not data:
             continue
+        is_rejected = data.get("company_type") == "rejected"
+        score_val = data.get("score", 0) or 0
         payload = {
-            "score": data.get("score", 0),
+            "score": score_val,
             "company_type": data.get("company_type", "rejected"),
             "rationale": data.get("rationale"),
             "rejection_reason": data.get("rejection_reason"),
@@ -275,13 +317,26 @@ def main() -> None:
             "industry_tag": data.get("industry_tag"),
             "exa_scrape_success": data.get("exa_scrape_success", False),
             "scoring_failed": data.get("scoring_failed", False),
-            "hidden": data.get("company_type") == "rejected",
+            "hidden": is_rejected,
         }
         for c in group:
-            update_contact(db, c["id"], payload)
+            contact_payload = dict(payload)
+            if not is_rejected:
+                now_passing += 1
+                # Mirror the import pipeline: passing contacts without a
+                # mobile phone get queued for Apollo enrichment.
+                if not (c.get("mobile_phone") or "").strip() and score_val >= ENRICHMENT_MIN_SCORE:
+                    contact_payload["enrichment_status"] = "pending_enrichment"
+                    queued_enrichment += 1
+            update_contact(db, c["id"], contact_payload)
             updated += 1
 
-    logger.info("Updated %s contact rows (scoring fields only)", updated)
+    logger.info(
+        "Updated %s contact rows (scoring fields only); %s now passing, %s queued for enrichment",
+        updated,
+        now_passing,
+        queued_enrichment,
+    )
 
     after_hist = _outcome_histogram(db)
     logger.info("call_logs snapshot after: %s", after_hist)
