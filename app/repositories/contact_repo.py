@@ -202,20 +202,24 @@ def get_callable_location_counts(db: Client) -> dict:
     (fresh) or a didnt_pick_up retry that is due. Contacts currently claimed
     by a user are still counted — claims are transient.
 
-    Returns {"total", "countries", "states", "cities", "no_location"} where
-    each location list is [{"name", "count"}, ...] sorted by count descending.
+    Returns {"total", "countries", "states", "cities", "no_location",
+    "call_counts"} where each location list is [{"name", "count"}, ...]
+    sorted by count descending, and call_counts buckets the pool by how many
+    times each contact has been called before: {"never", "once", "twice",
+    "three_plus"}.
     """
     now_iso = datetime.now(timezone.utc).isoformat()
     country_counts: dict[str, int] = {}
     state_counts: dict[str, int] = {}
     city_counts: dict[str, int] = {}
+    call_counts = {"never": 0, "once": 0, "twice": 0, "three_plus": 0}
     total = 0
     no_location = 0
     offset = 0
     while True:
         result = (
             db.table("contacts")
-            .select("city, state, country")
+            .select("city, state, country, times_called")
             .or_("hidden.is.null,hidden.eq.false")
             .or_("company_type.is.null,company_type.neq.rejected")
             .or_("mobile_phone.not.is.null,work_direct_phone.not.is.null,corporate_phone.not.is.null")
@@ -240,6 +244,15 @@ def get_callable_location_counts(db: Client) -> dict:
                 city_counts[city] = city_counts.get(city, 0) + 1
             if not (country or state or city):
                 no_location += 1
+            times_called = row.get("times_called") or 0
+            if times_called == 0:
+                call_counts["never"] += 1
+            elif times_called == 1:
+                call_counts["once"] += 1
+            elif times_called == 2:
+                call_counts["twice"] += 1
+            else:
+                call_counts["three_plus"] += 1
         if len(rows) < _LOCATION_PAGE:
             break
         offset += _LOCATION_PAGE
@@ -256,6 +269,7 @@ def get_callable_location_counts(db: Client) -> dict:
         "states": _ranked(state_counts),
         "cities": _ranked(city_counts),
         "no_location": no_location,
+        "call_counts": call_counts,
     }
 
 

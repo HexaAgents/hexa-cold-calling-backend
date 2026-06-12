@@ -65,9 +65,9 @@ class TestLocationCounts:
         query.or_.return_value = query
         query.range.return_value = query
         query.execute.return_value = _make_execute_result([
-            {"city": "Houston", "state": "Texas", "country": "United States"},
-            {"city": "", "state": "Texas", "country": "United States"},
-            {"city": "", "state": "", "country": ""},
+            {"city": "Houston", "state": "Texas", "country": "United States", "times_called": 0},
+            {"city": "", "state": "Texas", "country": "United States", "times_called": 1},
+            {"city": "", "state": "", "country": "", "times_called": 4},
         ])
         mock_supabase.table.return_value.select.return_value = query
 
@@ -78,6 +78,7 @@ class TestLocationCounts:
         assert body["states"][0] == {"name": "Texas", "count": 2}
         assert body["cities"] == [{"name": "Houston", "count": 1}]
         assert body["no_location"] == 1
+        assert body["call_counts"] == {"never": 1, "once": 1, "twice": 0, "three_plus": 1}
 
 
 def _make_execute_result(data, count=None):

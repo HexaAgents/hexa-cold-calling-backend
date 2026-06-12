@@ -257,6 +257,28 @@ class TestGetCallableLocationCounts:
         assert res["total"] == 1001
         assert res["states"] == [{"name": "Texas", "count": 1001}]
 
+    def test_call_count_buckets(self):
+        db = _location_db([
+            {"city": "", "state": "", "country": "", "times_called": 0},
+            {"city": "", "state": "", "country": "", "times_called": None},
+            {"city": "", "state": "", "country": "", "times_called": 1},
+            {"city": "", "state": "", "country": "", "times_called": 2},
+            {"city": "", "state": "", "country": "", "times_called": 3},
+            {"city": "", "state": "", "country": "", "times_called": 7},
+        ])
+        res = get_callable_location_counts(db)
+        assert res["call_counts"] == {
+            "never": 2,
+            "once": 1,
+            "twice": 1,
+            "three_plus": 2,
+        }
+
+    def test_rows_without_times_called_count_as_never(self):
+        db = _location_db([{"city": "Houston", "state": "", "country": ""}])
+        res = get_callable_location_counts(db)
+        assert res["call_counts"]["never"] == 1
+
 
 class TestScoreRowRank:
     def test_distributor_outranks_rejected_regardless_of_score(self):
