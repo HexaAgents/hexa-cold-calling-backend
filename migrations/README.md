@@ -10,6 +10,9 @@ This directory contains ordered Supabase/Postgres SQL migrations. Apply files in
 - `021_scheduled_calls.sql` through `025_silence_exhausted_contacts.sql`: scheduled callbacks, bad-number handling, filtered CSV download, and exhausted-contact cleanup/silencing.
 - `026_todos.sql`: standalone team to-do list with task metadata and first-assignee compatibility fields.
 - `027_todo_multi_assignees.sql`: canonical multi-assignee join table for to-do tasks.
+- `028_add_discarded_csv.sql` and `030_add_input_csv.sql`: store the discarded-rows CSV and the original upload CSV on import batches for download.
+- `029_reactivate_stale_didnt_pickup.sql`: shared-pool refeed of stale "didn't pick up" contacts (claimable by any caller) plus the reactivation function.
+- `031_call_priority_order.sql`: claim queue priority — least-called first, then later local time of day, then higher score (replaces the old retries-first, score-only ordering).
 
 ## To-Do Tables
 
