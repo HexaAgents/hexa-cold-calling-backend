@@ -112,3 +112,31 @@ def update_todo(db: Client, todo_id: str, data: dict, assignees: list[dict] | No
 def delete_todo(db: Client, todo_id: str) -> bool:
     result = db.table("todos").delete().eq("id", todo_id).execute()
     return bool(result.data)
+
+
+def mark_recurrence_spawned(db: Client, todo_id: str) -> None:
+    """Record that this row's completion already created the next occurrence."""
+    db.table("todos").update({"recurrence_spawned": True}).eq("id", todo_id).execute()
+
+
+def set_estimate(db: Client, todo_id: str, fields: dict) -> None:
+    """Write estimate columns directly, bypassing assignee mirroring."""
+    db.table("todos").update(fields).eq("id", todo_id).execute()
+
+
+def get_calibration_examples(db: Client, limit: int = 10) -> list[dict]:
+    """Recent completed tasks with reported actual hours, newest first.
+
+    Used as few-shot calibration examples in the estimation prompt. Bounded by
+    `limit` (default 10) so the prompt can never grow unbounded.
+    """
+    result = (
+        db.table("todos")
+        .select("title, estimated_hours_min, estimated_hours_max, actual_hours")
+        .eq("is_done", True)
+        .not_.is_("actual_hours", "null")
+        .order("updated_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    return result.data or []

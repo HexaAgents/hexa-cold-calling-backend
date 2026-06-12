@@ -201,83 +201,82 @@ class TestGetExistingScores:
         assert in_mock.call_count == 3  # 120 websites / 50 per chunk
 
 
-def _location_db(*pages):
-    """Mock supabase client for the callable-location-counts query.
-
-    The query chains several .or_() filters before .range().execute(), so the
-    query mock returns itself from every builder method.
-    """
+def _rpc_db(data):
+    """Mock supabase client whose .rpc(...).execute() returns the given data."""
     db = MagicMock()
-    query = MagicMock()
-    query.or_.return_value = query
-    query.range.return_value = query
-    query.execute.side_effect = [MagicMock(data=list(page)) for page in pages]
-    db.table.return_value.select.return_value = query
+    db.rpc.return_value.execute.return_value = MagicMock(data=data)
     return db
 
 
+_COUNTS_PAYLOAD = {
+    "total": 3,
+    "countries": [{"name": "United States", "count": 2}, {"name": "Canada", "count": 1}],
+    "states": [{"name": "Texas", "count": 2}, {"name": "Ontario", "count": 1}],
+    "cities": [{"name": "Houston", "count": 1}],
+    "no_location": 0,
+    "call_counts": {"never": 2, "once": 1, "twice": 0, "three_plus": 0},
+}
+
+
 class TestGetCallableLocationCounts:
-    def test_counts_grouped_per_level_and_ranked(self):
-        db = _location_db([
-            {"city": "Houston", "state": "Texas", "country": "United States"},
-            {"city": "Dallas", "state": "Texas", "country": "United States"},
-            {"city": "Toronto", "state": "Ontario", "country": "Canada"},
-        ])
+    def test_returns_rpc_payload(self):
+        db = _rpc_db(_COUNTS_PAYLOAD)
         res = get_callable_location_counts(db)
-        assert res["total"] == 3
-        assert res["states"][0] == {"name": "Texas", "count": 2}
-        assert res["countries"][0] == {"name": "United States", "count": 2}
-        assert {"name": "Ontario", "count": 1} in res["states"]
-        assert res["no_location"] == 0
+        db.rpc.assert_called_once_with("get_callable_location_counts")
+        assert res == _COUNTS_PAYLOAD
 
-    def test_blank_locations_counted_as_no_location(self):
-        db = _location_db([
-            {"city": "", "state": None, "country": ""},
-            {"city": "Houston", "state": "", "country": ""},
-        ])
+    def test_empty_rpc_result_returns_zeroed_shape(self):
+        db = _rpc_db(None)
         res = get_callable_location_counts(db)
-        assert res["total"] == 2
-        assert res["no_location"] == 1  # only the fully blank row
-        assert res["cities"] == [{"name": "Houston", "count": 1}]
+        assert res["total"] == 0
+        assert res["countries"] == []
         assert res["states"] == []
+        assert res["cities"] == []
+        assert res["no_location"] == 0
+        assert res["call_counts"] == {"never": 0, "once": 0, "twice": 0, "three_plus": 0}
 
-    def test_ties_sorted_alphabetically(self):
-        db = _location_db([
-            {"city": "", "state": "Texas", "country": ""},
-            {"city": "", "state": "Ohio", "country": ""},
-        ])
-        res = get_callable_location_counts(db)
-        assert [s["name"] for s in res["states"]] == ["Ohio", "Texas"]
 
-    def test_paginates_until_short_page(self):
-        full_page = [{"city": "", "state": "Texas", "country": ""} for _ in range(1000)]
-        second_page = [{"city": "", "state": "Texas", "country": ""}]
-        db = _location_db(full_page, second_page)
-        res = get_callable_location_counts(db)
-        assert res["total"] == 1001
-        assert res["states"] == [{"name": "Texas", "count": 1001}]
+class TestGetDistinctLocations:
+    def test_returns_rpc_payload(self):
+        from app.repositories.contact_repo import get_distinct_locations
 
-    def test_call_count_buckets(self):
-        db = _location_db([
-            {"city": "", "state": "", "country": "", "times_called": 0},
-            {"city": "", "state": "", "country": "", "times_called": None},
-            {"city": "", "state": "", "country": "", "times_called": 1},
-            {"city": "", "state": "", "country": "", "times_called": 2},
-            {"city": "", "state": "", "country": "", "times_called": 3},
-            {"city": "", "state": "", "country": "", "times_called": 7},
-        ])
-        res = get_callable_location_counts(db)
-        assert res["call_counts"] == {
-            "never": 2,
-            "once": 1,
-            "twice": 1,
-            "three_plus": 2,
-        }
+        payload = {"cities": ["Berlin"], "states": ["Texas"], "countries": ["US"]}
+        db = _rpc_db(payload)
+        res = get_distinct_locations(db)
+        db.rpc.assert_called_once_with("get_distinct_locations")
+        assert res == payload
 
-    def test_rows_without_times_called_count_as_never(self):
-        db = _location_db([{"city": "Houston", "state": "", "country": ""}])
-        res = get_callable_location_counts(db)
-        assert res["call_counts"]["never"] == 1
+    def test_empty_rpc_result_returns_empty_lists(self):
+        from app.repositories.contact_repo import get_distinct_locations
+
+        db = _rpc_db(None)
+        assert get_distinct_locations(db) == {"cities": [], "states": [], "countries": []}
+
+
+class TestGetContactsExistingIds:
+    def test_empty_input_skips_query(self):
+        from app.repositories.contact_repo import get_contacts_existing_ids
+
+        db = MagicMock()
+        assert get_contacts_existing_ids(db, []) == []
+        db.table.assert_not_called()
+
+    def test_returns_existing_ids(self):
+        from app.repositories.contact_repo import get_contacts_existing_ids
+
+        db = MagicMock()
+        db.table.return_value.select.return_value.in_.return_value \
+            .execute.return_value = MagicMock(data=[{"id": "c-1"}, {"id": "c-3"}])
+        assert get_contacts_existing_ids(db, ["c-1", "c-2", "c-3"]) == ["c-1", "c-3"]
+
+    def test_chunks_large_id_lists(self):
+        from app.repositories.contact_repo import get_contacts_existing_ids
+
+        db = MagicMock()
+        in_mock = db.table.return_value.select.return_value.in_
+        in_mock.return_value.execute.return_value = MagicMock(data=[])
+        get_contacts_existing_ids(db, [f"c-{i}" for i in range(450)])
+        assert in_mock.call_count == 3  # 450 ids / 200 per chunk
 
 
 class TestScoreRowRank:

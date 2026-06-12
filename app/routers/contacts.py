@@ -43,12 +43,7 @@ def list_contacts(
 @router.get("/locations")
 def get_locations(current_user: CurrentUserDep, db: SupabaseDep):
     """Return distinct non-empty location values for filter dropdowns."""
-    locations: dict[str, list[str]] = {"cities": [], "states": [], "countries": []}
-    for field, key in [("city", "cities"), ("state", "states"), ("country", "countries")]:
-        result = db.table("contacts").select(field).not_.is_(field, "null").neq(field, "").neq("company_type", "rejected").execute()
-        values = sorted({row[field] for row in (result.data or []) if row.get(field)})
-        locations[key] = values
-    return locations
+    return contact_repo.get_distinct_locations(db)
 
 
 @router.get("/location-counts")
@@ -60,6 +55,20 @@ def get_location_counts(current_user: CurrentUserDep, db: SupabaseDep):
     each location while calling.
     """
     return contact_repo.get_callable_location_counts(db)
+
+
+@router.post("/validate")
+def validate_contacts(
+    current_user: CurrentUserDep,
+    db: SupabaseDep,
+    ids: list[str] = Body(embed=True),
+):
+    """Return which of the given contact ids still exist (batch existence check).
+
+    Used by the call tracker to validate its persisted session history in one
+    request instead of one GET per contact.
+    """
+    return {"existing_ids": contact_repo.get_contacts_existing_ids(db, ids)}
 
 
 @router.get("/{contact_id}", response_model=ContactOut)

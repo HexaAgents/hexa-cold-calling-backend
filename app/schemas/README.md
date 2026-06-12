@@ -144,11 +144,11 @@ Request body for `POST /todos`. Only `title` is required:
 
 ### `TodoUpdate`
 
-Write model for `PATCH /todos/{id}` (edit / reassign / mark done). All fields optional. `assignees` replaces the task's assignee list; `unassign: bool` clears it. The assigner and any assigned user may edit task details; delete remains assigner-only.
+Write model for `PATCH /todos/{id}` (edit / reassign / mark done). All fields optional. `assignees` replaces the task's assignee list; `unassign: bool` clears it. The assigner and any assigned user may edit task details; delete remains assigner-only. `actual_hours: float | None` (bounded `ge=0.1, le=500`, 422 otherwise) records how long a completed task really took — the bound keeps junk values out of the AI estimator's calibration examples.
 
 ### `TodoOut`
 
-Full read model returned by the list, detail, create, and update endpoints, including `assignees`, first-assignee compatibility fields, `assigned_by_id`/`assigned_by_name`, `is_done`, and timestamps.
+Full read model returned by the list, detail, create, and update endpoints, including `assignees`, first-assignee compatibility fields, `assigned_by_id`/`assigned_by_name`, `is_done`, timestamps, and the AI time-estimate fields: `estimated_hours_min`, `estimated_hours_max`, `estimate_status` (`pending`/`done`/`failed`/null), and `actual_hours`.
 
 ### `TodoAssignee`
 

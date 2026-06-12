@@ -47,6 +47,19 @@ class TestTodoCreate:
         with pytest.raises(ValidationError):
             TodoCreate()
 
+    def test_recurrence_pair_accepted(self):
+        todo = TodoCreate(title="Weekly report", recurrence_interval=2, recurrence_unit="week")
+        assert todo.recurrence_interval == 2
+        assert todo.recurrence_unit == "week"
+
+    def test_recurrence_interval_without_unit_rejected(self):
+        with pytest.raises(ValidationError):
+            TodoCreate(title="Broken", recurrence_interval=2)
+
+    def test_recurrence_unit_without_interval_rejected(self):
+        with pytest.raises(ValidationError):
+            TodoCreate(title="Broken", recurrence_unit="day")
+
 
 class TestTodoUpdate:
     def test_all_optional(self):
@@ -60,6 +73,17 @@ class TestTodoUpdate:
         update = TodoUpdate(is_done=True)
         provided = update.model_dump(exclude_unset=True)
         assert provided == {"is_done": True}
+
+    def test_update_can_clear_recurrence_with_explicit_nulls(self):
+        update = TodoUpdate(recurrence_interval=None, recurrence_unit=None)
+        provided = update.model_dump(exclude_unset=True)
+        assert provided == {"recurrence_interval": None, "recurrence_unit": None}
+
+    def test_update_rejects_partial_recurrence(self):
+        with pytest.raises(ValidationError):
+            TodoUpdate(recurrence_interval=2)
+        with pytest.raises(ValidationError):
+            TodoUpdate(recurrence_unit="week")
 
 
 class TestTodoOut:

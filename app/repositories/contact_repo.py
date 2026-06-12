@@ -29,15 +29,10 @@ def list_contacts(
         query = query.eq("call_outcome", outcome_filter)
 
     if search:
-        pattern = f"%{search}%"
-        query = query.or_(
-            f"first_name.ilike.{pattern},"
-            f"last_name.ilike.{pattern},"
-            f"company_name.ilike.{pattern},"
-            f"mobile_phone.ilike.{pattern},"
-            f"work_direct_phone.ilike.{pattern},"
-            f"corporate_phone.ilike.{pattern}"
-        )
+        # search_text is a generated column concatenating name, company, and
+        # phone fields, backed by a trigram GIN index (migration 034) so
+        # leading-wildcard ILIKE uses an index scan.
+        query = query.ilike("search_text", f"%{search}%")
 
     desc = sort_order.lower() == "desc"
     query = query.order(sort_by, desc=desc)
@@ -191,9 +186,6 @@ def _score_row_rank(row: dict) -> tuple[int, int]:
     )
 
 
-_LOCATION_PAGE = 1000
-
-
 def get_callable_location_counts(db: Client) -> dict:
     """Counts of callable contacts grouped by country, state, and city.
 
@@ -202,75 +194,48 @@ def get_callable_location_counts(db: Client) -> dict:
     (fresh) or a didnt_pick_up retry that is due. Contacts currently claimed
     by a user are still counted — claims are transient.
 
+    Aggregated in SQL via the get_callable_location_counts RPC (migration
+    035) — one GROUP BY instead of paging the whole pool over PostgREST.
+
     Returns {"total", "countries", "states", "cities", "no_location",
     "call_counts"} where each location list is [{"name", "count"}, ...]
     sorted by count descending, and call_counts buckets the pool by how many
     times each contact has been called before: {"never", "once", "twice",
     "three_plus"}.
     """
-    now_iso = datetime.now(timezone.utc).isoformat()
-    country_counts: dict[str, int] = {}
-    state_counts: dict[str, int] = {}
-    city_counts: dict[str, int] = {}
-    call_counts = {"never": 0, "once": 0, "twice": 0, "three_plus": 0}
-    total = 0
-    no_location = 0
-    offset = 0
-    while True:
-        result = (
-            db.table("contacts")
-            .select("city, state, country, times_called")
-            .or_("hidden.is.null,hidden.eq.false")
-            .or_("company_type.is.null,company_type.neq.rejected")
-            .or_("mobile_phone.not.is.null,work_direct_phone.not.is.null,corporate_phone.not.is.null")
-            .or_(
-                "call_outcome.is.null,"
-                f"and(call_outcome.eq.didnt_pick_up,retry_at.not.is.null,retry_at.lte.{now_iso})"
-            )
-            .range(offset, offset + _LOCATION_PAGE - 1)
-            .execute()
-        )
-        rows = result.data or []
-        for row in rows:
-            total += 1
-            country = (row.get("country") or "").strip()
-            state = (row.get("state") or "").strip()
-            city = (row.get("city") or "").strip()
-            if country:
-                country_counts[country] = country_counts.get(country, 0) + 1
-            if state:
-                state_counts[state] = state_counts.get(state, 0) + 1
-            if city:
-                city_counts[city] = city_counts.get(city, 0) + 1
-            if not (country or state or city):
-                no_location += 1
-            times_called = row.get("times_called") or 0
-            if times_called == 0:
-                call_counts["never"] += 1
-            elif times_called == 1:
-                call_counts["once"] += 1
-            elif times_called == 2:
-                call_counts["twice"] += 1
-            else:
-                call_counts["three_plus"] += 1
-        if len(rows) < _LOCATION_PAGE:
-            break
-        offset += _LOCATION_PAGE
-
-    def _ranked(counts: dict[str, int]) -> list[dict]:
-        return [
-            {"name": name, "count": count}
-            for name, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
-        ]
-
-    return {
-        "total": total,
-        "countries": _ranked(country_counts),
-        "states": _ranked(state_counts),
-        "cities": _ranked(city_counts),
-        "no_location": no_location,
-        "call_counts": call_counts,
+    result = db.rpc("get_callable_location_counts").execute()
+    return result.data or {
+        "total": 0,
+        "countries": [],
+        "states": [],
+        "cities": [],
+        "no_location": 0,
+        "call_counts": {"never": 0, "once": 0, "twice": 0, "three_plus": 0},
     }
+
+
+def get_distinct_locations(db: Client) -> dict:
+    """Distinct non-empty city/state/country values for filter dropdowns.
+
+    Uses the get_distinct_locations RPC (migration 035): one SQL DISTINCT
+    query instead of three unbounded column scans deduped in Python (which
+    silently truncated at the PostgREST max-rows cap).
+    """
+    result = db.rpc("get_distinct_locations").execute()
+    return result.data or {"cities": [], "states": [], "countries": []}
+
+
+def get_contacts_existing_ids(db: Client, contact_ids: list[str]) -> list[str]:
+    """Return the subset of contact_ids that still exist, in one query."""
+    if not contact_ids:
+        return []
+    existing: list[str] = []
+    chunk_size = 200
+    for i in range(0, len(contact_ids), chunk_size):
+        chunk = contact_ids[i : i + chunk_size]
+        result = db.table("contacts").select("id").in_("id", chunk).execute()
+        existing.extend(row["id"] for row in (result.data or []))
+    return existing
 
 
 def release_stale_claims(db: Client) -> int:
@@ -300,74 +265,14 @@ def get_contacts_needing_sms(db: Client) -> list[dict]:
     return result.data or []
 
 
-_COMPANY_FIELDS = (
-    "company_name, website, company_linkedin_url, company_description,"
-    "employees, industry_tag, score, city, state, country, call_outcome"
-)
-
-
 def get_all_companies(db: Client, search: str | None = None) -> list[dict]:
-    """Return company summaries grouped by company_name from non-rejected contacts."""
-    query = (
-        db.table("contacts")
-        .select(_COMPANY_FIELDS)
-        .neq("company_type", "rejected")
-        .or_("hidden.is.null,hidden.eq.false")
-        .neq("company_name", "")
-    )
-    if search:
-        query = query.ilike("company_name", f"%{search}%")
-    result = query.execute()
-    rows = result.data or []
-    if not rows:
-        return []
+    """Return company summaries grouped by company_name from non-rejected contacts.
 
-    groups: dict[str, dict] = {}
-    for row in rows:
-        name = row["company_name"]
-        if name not in groups:
-            groups[name] = {
-                "company_name": name,
-                "website": None,
-                "company_linkedin_url": None,
-                "company_description": None,
-                "employees": None,
-                "industry_tag": None,
-                "city": None,
-                "state": None,
-                "country": None,
-                "contact_count": 0,
-                "score_sum": 0,
-                "score_count": 0,
-            }
-        g = groups[name]
-        g["contact_count"] += 1
-        for field in ("website", "company_linkedin_url", "company_description",
-                      "employees", "industry_tag", "city", "state", "country"):
-            if not g[field] and row.get(field):
-                g[field] = row[field]
-        if row.get("score") is not None:
-            g["score_sum"] += row["score"]
-            g["score_count"] += 1
-
-    summaries = []
-    for g in groups.values():
-        avg = round(g["score_sum"] / g["score_count"]) if g["score_count"] else None
-        summaries.append({
-            "company_name": g["company_name"],
-            "website": g["website"],
-            "company_linkedin_url": g["company_linkedin_url"],
-            "company_description": g["company_description"],
-            "employees": g["employees"],
-            "industry_tag": g["industry_tag"],
-            "city": g["city"],
-            "state": g["state"],
-            "country": g["country"],
-            "contact_count": g["contact_count"],
-            "avg_score": avg,
-        })
-    summaries.sort(key=lambda s: s["contact_count"], reverse=True)
-    return summaries
+    Aggregated in SQL via the get_company_summaries RPC (migration 035)
+    instead of fetching every contact row and grouping in Python.
+    """
+    result = db.rpc("get_company_summaries", {"p_search": search}).execute()
+    return result.data or []
 
 
 def get_contacts_by_company(db: Client, company_name: str) -> list[dict]:

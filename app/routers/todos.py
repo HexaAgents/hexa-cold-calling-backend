@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 
 from app.config import settings
 from app.dependencies import SupabaseDep, CurrentUserDep
 from app.schemas.todo import TodoCreate, TodoUpdate, TodoOut, TodoAssignee
 from app.repositories import todo_repo, email_repo
-from app.services import email_service
+from app.services import email_service, todo_estimate_service, todo_recurrence_service
 
 router = APIRouter(prefix="/todos", tags=["todos"])
 logger = logging.getLogger(__name__)
@@ -135,7 +135,12 @@ def get_todo(todo_id: str, current_user: CurrentUserDep, db: SupabaseDep):
 
 
 @router.post("", response_model=TodoOut, status_code=201)
-def create_todo(body: TodoCreate, current_user: CurrentUserDep, db: SupabaseDep):
+def create_todo(
+    body: TodoCreate,
+    current_user: CurrentUserDep,
+    db: SupabaseDep,
+    background_tasks: BackgroundTasks,
+):
     assignees = _assignee_payload(body.assignees, body.assigned_to_id, body.assigned_to_name)
     data = {
         "title": body.title,
@@ -143,9 +148,17 @@ def create_todo(body: TodoCreate, current_user: CurrentUserDep, db: SupabaseDep)
         "assigned_by_id": current_user["id"],
         "assigned_by_name": _first_name(current_user.get("full_name"), current_user.get("email", "")),
         "due_date": body.due_date,
+        "recurrence_interval": body.recurrence_interval,
+        "recurrence_unit": body.recurrence_unit,
+        # The one and only trigger for AI time estimation: the background task
+        # below estimates this task once, then the status moves to a terminal
+        # done/failed. Edits never re-trigger estimation.
+        "estimate_status": "pending",
     }
     todo = todo_repo.create_todo(db, data, assignees)
     _notify_new_assignees(db, current_user, todo, set())
+    if todo.get("id"):
+        background_tasks.add_task(todo_estimate_service.generate_estimate, db, todo["id"])
     return TodoOut(**todo)
 
 
@@ -185,6 +198,20 @@ def update_todo(todo_id: str, body: TodoUpdate, current_user: CurrentUserDep, db
         raise HTTPException(status_code=404, detail="Task not found")
     if assignees_provided:
         _notify_new_assignees(db, current_user, updated, previous_assignee_ids)
+
+    # Completing a recurring task spawns its next occurrence. Best-effort: a
+    # failure here must not undo or hide the successful completion above.
+    if provided.get("is_done") is True and not existing.get("is_done"):
+        # update_todo only knows the legacy first assignee unless assignees were
+        # part of this PATCH; use the fully-loaded existing row's list instead.
+        source = dict(updated)
+        if not assignees_provided:
+            source["assignees"] = existing.get("assignees", [])
+        try:
+            todo_recurrence_service.spawn_next_occurrence(db, source)
+        except Exception as exc:
+            logger.warning("Could not create next occurrence for todo %s: %s", todo_id, exc)
+
     return TodoOut(**updated)
 
 

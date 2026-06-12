@@ -8,7 +8,13 @@ from app.schemas.contact import ContactOut
 import logging
 
 from app.services import call_service, email_service
-from app.repositories import call_log_repo, contact_repo
+from app.repositories import (
+    call_log_repo,
+    company_flag_repo,
+    contact_repo,
+    email_repo,
+    note_repo,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -116,6 +122,31 @@ def log_call(body: CallLogCreate, current_user: CurrentUserDep, db: SupabaseDep)
         retry_at=result["retry_at"],
         contact_silenced=result.get("contact_silenced", False),
     )
+
+
+@router.get("/contact-bundle/{contact_id}")
+def get_contact_bundle(contact_id: str, current_user: CurrentUserDep, db: SupabaseDep):
+    """Everything the call tracker shows for a contact, in one round trip.
+
+    Collapses the previous 4-request fan-out (notes, call history, email
+    logs, company flag) into a single response.
+    """
+    try:
+        contact = contact_repo.get_contact(db, contact_id)
+    except Exception:
+        # PostgREST .single() raises when the row doesn't exist.
+        contact = None
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    company_name = contact.get("company_name") or ""
+    flag = company_flag_repo.get_flag(db, company_name) if company_name else None
+    return {
+        "notes": note_repo.get_notes_for_contact(db, contact_id),
+        "calls": call_log_repo.get_call_logs_for_contact(db, contact_id),
+        "email_logs": email_repo.get_email_logs_for_contact(db, contact_id),
+        "company_flag": flag,
+    }
 
 
 @router.get("/contact/{contact_id}", response_model=list[CallLogOut])

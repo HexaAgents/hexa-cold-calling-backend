@@ -1,12 +1,24 @@
 from __future__ import annotations
 
 from datetime import datetime
-from pydantic import BaseModel
+from typing import Literal
+
+from pydantic import BaseModel, Field, model_validator
+
+RecurrenceUnit = Literal["day", "week", "month"]
 
 
 class TodoAssignee(BaseModel):
     id: str
     first_name: str
+
+
+def _validate_recurrence_pair(model: BaseModel) -> None:
+    """Recurrence interval and unit must be set together (or cleared together)."""
+    interval = getattr(model, "recurrence_interval", None)
+    unit = getattr(model, "recurrence_unit", None)
+    if (interval is None) != (unit is None):
+        raise ValueError("recurrence_interval and recurrence_unit must be provided together")
 
 
 class TodoCreate(BaseModel):
@@ -16,6 +28,13 @@ class TodoCreate(BaseModel):
     assigned_to_name: str | None = None
     assignees: list[TodoAssignee] | None = None
     due_date: str | None = None
+    recurrence_interval: int | None = Field(default=None, ge=1, le=365)
+    recurrence_unit: RecurrenceUnit | None = None
+
+    @model_validator(mode="after")
+    def _check_recurrence(self):
+        _validate_recurrence_pair(self)
+        return self
 
 
 class TodoUpdate(BaseModel):
@@ -26,9 +45,22 @@ class TodoUpdate(BaseModel):
     assignees: list[TodoAssignee] | None = None
     due_date: str | None = None
     is_done: bool | None = None
+    recurrence_interval: int | None = Field(default=None, ge=1, le=365)
+    recurrence_unit: RecurrenceUnit | None = None
+    # Reported by whoever ticks the task off; bounded so junk values can't
+    # poison the estimation calibration examples.
+    actual_hours: float | None = Field(default=None, ge=0.1, le=500)
     # Distinguishes "unassign" (explicit null) from "leave unchanged" (omitted),
     # since assigned_to_id=None is also the value used to clear an assignee.
     unassign: bool = False
+
+    @model_validator(mode="after")
+    def _check_recurrence(self):
+        # Partial updates may omit both fields; but if either is touched, the
+        # pair must end up consistent (both set or both null).
+        if "recurrence_interval" in self.model_fields_set or "recurrence_unit" in self.model_fields_set:
+            _validate_recurrence_pair(self)
+        return self
 
 
 class TodoOut(BaseModel):
@@ -42,5 +74,12 @@ class TodoOut(BaseModel):
     assigned_by_name: str | None = None
     due_date: str | None = None
     is_done: bool = False
+    recurrence_interval: int | None = None
+    recurrence_unit: RecurrenceUnit | None = None
+    recurrence_spawned: bool = False
+    estimated_hours_min: float | None = None
+    estimated_hours_max: float | None = None
+    estimate_status: str | None = None
+    actual_hours: float | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None

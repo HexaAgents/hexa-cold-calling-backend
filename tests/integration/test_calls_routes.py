@@ -238,6 +238,59 @@ class TestCallHistory:
         assert resp.json() == []
 
 
+class TestContactBundle:
+    @patch("app.routers.calls.company_flag_repo")
+    @patch("app.routers.calls.email_repo")
+    @patch("app.routers.calls.call_log_repo")
+    @patch("app.routers.calls.note_repo")
+    @patch("app.routers.calls.contact_repo")
+    def test_returns_all_sections(
+        self, mock_contact_repo, mock_note_repo, mock_call_log_repo,
+        mock_email_repo, mock_flag_repo, client, mock_supabase,
+    ):
+        mock_contact_repo.get_contact.return_value = SAMPLE_CONTACT
+        mock_note_repo.get_notes_for_contact.return_value = [{"id": "n-1"}]
+        mock_call_log_repo.get_call_logs_for_contact.return_value = [SAMPLE_CALL_LOG]
+        mock_email_repo.get_email_logs_for_contact.return_value = []
+        mock_flag_repo.get_flag.return_value = {"id": "f-1", "reason": "Has AI provider"}
+
+        resp = client.get("/calls/contact-bundle/c-1")
+        assert resp.status_code == 200
+
+        body = resp.json()
+        assert body["notes"] == [{"id": "n-1"}]
+        assert body["calls"][0]["id"] == "log-1"
+        assert body["email_logs"] == []
+        assert body["company_flag"]["reason"] == "Has AI provider"
+        mock_flag_repo.get_flag.assert_called_once_with(mock_supabase, "ACME Corp")
+
+    @patch("app.routers.calls.contact_repo")
+    def test_404_when_contact_missing(self, mock_contact_repo, client, mock_supabase):
+        mock_contact_repo.get_contact.return_value = None
+
+        resp = client.get("/calls/contact-bundle/nonexistent")
+        assert resp.status_code == 404
+
+    @patch("app.routers.calls.company_flag_repo")
+    @patch("app.routers.calls.email_repo")
+    @patch("app.routers.calls.call_log_repo")
+    @patch("app.routers.calls.note_repo")
+    @patch("app.routers.calls.contact_repo")
+    def test_no_flag_lookup_without_company_name(
+        self, mock_contact_repo, mock_note_repo, mock_call_log_repo,
+        mock_email_repo, mock_flag_repo, client, mock_supabase,
+    ):
+        mock_contact_repo.get_contact.return_value = {**SAMPLE_CONTACT, "company_name": ""}
+        mock_note_repo.get_notes_for_contact.return_value = []
+        mock_call_log_repo.get_call_logs_for_contact.return_value = []
+        mock_email_repo.get_email_logs_for_contact.return_value = []
+
+        resp = client.get("/calls/contact-bundle/c-1")
+        assert resp.status_code == 200
+        assert resp.json()["company_flag"] is None
+        mock_flag_repo.get_flag.assert_not_called()
+
+
 class TestDeleteCallLog:
     @patch("app.services.call_service.contact_repo")
     @patch("app.services.call_service.call_log_repo")

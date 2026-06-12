@@ -17,6 +17,7 @@ The pipeline has three stages:
 | `prompts.py` | System prompt (classification rules, scoring rubric) and user message template |
 | `exa_client.py` | Website content extraction via Exa API with search fallback |
 | `openai_scorer.py` | OpenAI GPT call, retry logic, response parsing and validation |
+| `todo_estimator.py` | LLM time estimation for to-do tasks (hour ranges) with bounded calibration examples |
 
 ---
 
@@ -250,3 +251,29 @@ Parses and validates the raw JSON string from the LLM. This function is **defens
 4. **Response validation** — `_parse_response()` validates every field: clamps score to 0-100, checks company_type against `{"distributor", "rejected"}` and rejection_reason against the allowlist, casts rationale to string.
 5. **Storage** — The validated scoring result (`score`, `company_type`, `rationale`, `rejection_reason`, `exa_scrape_success`) is written to the contact row via `contact_repo.create_contacts_batch()`.
 6. **Phone enrichment** — Contacts scoring >= 40 (confirmed industrial distributors at 50+, plus adjacent B2B distributors in the 40-49 band) that lack a mobile phone are automatically queued for Apollo enrichment (`enrichment_status = "pending_enrichment"`).
+
+---
+
+## todo_estimator.py
+
+LLM time estimation for the to-do list — reuses the same OpenAI client pattern as company scoring (`_call_openai`: gpt-4o-mini, JSON mode, 30s timeout, one built-in retry).
+
+### `ESTIMATE_SYSTEM_PROMPT`
+
+Persona: estimating focused working hours for a small B2B cold-calling/sales-ops team's tasks. Output contract is strict JSON `{"hours_min": <number>, "hours_max": <number>}` with guidance to keep ranges tight and to weigh calibration examples heavily when present.
+
+### `estimate_todo_hours(api_key, title, description, examples, model) → dict | None`
+
+Builds a bounded user message and makes **at most one** OpenAI request. Returns `{"hours_min", "hours_max"}` or `None` on any failure (API error, bad JSON, missing fields). The caller (`todo_estimate_service`) treats `None` as terminal — estimation is never retried.
+
+### Token-usage bounds
+
+Every input to the prompt is hard-capped:
+
+- `MAX_EXAMPLES = 10` calibration examples (recent completed tasks with reported `actual_hours`), each formatted as one line.
+- `MAX_TITLE_CHARS = 120` and `MAX_DESCRIPTION_CHARS = 500` truncation on the task being estimated and on example titles.
+- Output clamped to `MIN_HOURS = 0.25` … `MAX_HOURS = 200` (rounded to one decimal, inverted ranges swapped).
+
+### Calibration ("learning" loop)
+
+`format_calibration_examples()` renders past tasks as `"<title>" (estimated 1.0-2.0h) actually took 1.5h` lines. These come from `todo_repo.get_calibration_examples()` (completed todos with non-null `actual_hours`, newest first). Each new estimate therefore reflects how long this team *actually* takes — the prompt improves as more people report hours, with no self-modifying prompt files.

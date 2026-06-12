@@ -64,7 +64,7 @@ Copy `.env.example` to `.env` for local development. Keep `.env` local and never
 - Apollo: enrichment requests and webhook ingestion.
 - Productivity: team call/outcome reporting.
 - Scheduled calls: follow-up scheduling and completion/cancellation.
-- To-do list: title-only task creation, optional descriptions/due dates, multi-assignees, assigner/assignee editing, assigner-only delete, and assignment notifications.
+- To-do list: title-only task creation, optional descriptions/due dates, multi-assignees, assigner/assignee editing, assigner-only delete, assignment notifications, and AI time estimates (one background OpenAI call per created task produces an hour range; reported actual hours calibrate future estimates).
 
 ## Tests
 

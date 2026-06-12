@@ -43,42 +43,56 @@ SAMPLE_CONTACT = {
 
 class TestGetLocations:
     def test_returns_distinct_locations(self, client, mock_supabase):
-        mock_supabase.table.return_value \
-            .select.return_value \
-            .not_.return_value \
-            .neq.return_value \
-            .execute.return_value = _make_execute_result([
-                {"city": "Berlin"}, {"city": "Munich"}, {"city": "Berlin"},
-            ])
+        mock_supabase.rpc.return_value.execute.return_value = _make_execute_result({
+            "cities": ["Berlin", "Munich"],
+            "states": ["Bavaria"],
+            "countries": ["DE"],
+        })
 
         resp = client.get("/contacts/locations")
         assert resp.status_code == 200
         body = resp.json()
-        assert "cities" in body
-        assert "states" in body
-        assert "countries" in body
+        assert body["cities"] == ["Berlin", "Munich"]
+        assert body["states"] == ["Bavaria"]
+        assert body["countries"] == ["DE"]
+        mock_supabase.rpc.assert_called_once_with("get_distinct_locations")
 
 
 class TestLocationCounts:
     def test_returns_callable_counts_per_location(self, client, mock_supabase):
-        query = MagicMock()
-        query.or_.return_value = query
-        query.range.return_value = query
-        query.execute.return_value = _make_execute_result([
-            {"city": "Houston", "state": "Texas", "country": "United States", "times_called": 0},
-            {"city": "", "state": "Texas", "country": "United States", "times_called": 1},
-            {"city": "", "state": "", "country": "", "times_called": 4},
-        ])
-        mock_supabase.table.return_value.select.return_value = query
+        payload = {
+            "total": 3,
+            "countries": [{"name": "United States", "count": 2}],
+            "states": [{"name": "Texas", "count": 2}],
+            "cities": [{"name": "Houston", "count": 1}],
+            "no_location": 1,
+            "call_counts": {"never": 1, "once": 1, "twice": 0, "three_plus": 1},
+        }
+        mock_supabase.rpc.return_value.execute.return_value = _make_execute_result(payload)
 
         resp = client.get("/contacts/location-counts")
         assert resp.status_code == 200
         body = resp.json()
-        assert body["total"] == 3
-        assert body["states"][0] == {"name": "Texas", "count": 2}
-        assert body["cities"] == [{"name": "Houston", "count": 1}]
-        assert body["no_location"] == 1
-        assert body["call_counts"] == {"never": 1, "once": 1, "twice": 0, "three_plus": 1}
+        assert body == payload
+        mock_supabase.rpc.assert_called_once_with("get_callable_location_counts")
+
+
+class TestValidateContacts:
+    def test_returns_existing_ids(self, client, mock_supabase):
+        mock_supabase.table.return_value \
+            .select.return_value \
+            .in_.return_value \
+            .execute.return_value = _make_execute_result([{"id": "c-1"}])
+
+        resp = client.post("/contacts/validate", json={"ids": ["c-1", "c-gone"]})
+        assert resp.status_code == 200
+        assert resp.json() == {"existing_ids": ["c-1"]}
+
+    def test_empty_ids(self, client, mock_supabase):
+        resp = client.post("/contacts/validate", json={"ids": []})
+        assert resp.status_code == 200
+        assert resp.json() == {"existing_ids": []}
+        mock_supabase.table.assert_not_called()
 
 
 def _make_execute_result(data, count=None):
@@ -255,11 +269,12 @@ class TestDeletePhoneNumber:
 
 class TestListContactsWithSearch:
     def test_search_by_name(self, client, mock_supabase):
-        mock_supabase.table.return_value \
+        search_chain = mock_supabase.table.return_value \
             .select.return_value \
             .neq.return_value \
             .or_.return_value \
-            .or_.return_value \
+            .ilike
+        search_chain.return_value \
             .order.return_value \
             .range.return_value \
             .execute.return_value = _make_execute_result([SAMPLE_CONTACT], count=1)
@@ -269,13 +284,14 @@ class TestListContactsWithSearch:
         body = resp.json()
         assert body["total"] == 1
         assert body["contacts"][0]["first_name"] == "Jane"
+        search_chain.assert_called_once_with("search_text", "%Jane%")
 
     def test_search_by_phone(self, client, mock_supabase):
         mock_supabase.table.return_value \
             .select.return_value \
             .neq.return_value \
             .or_.return_value \
-            .or_.return_value \
+            .ilike.return_value \
             .order.return_value \
             .range.return_value \
             .execute.return_value = _make_execute_result([SAMPLE_CONTACT], count=1)
@@ -290,7 +306,7 @@ class TestListContactsWithSearch:
             .neq.return_value \
             .or_.return_value \
             .eq.return_value \
-            .or_.return_value \
+            .ilike.return_value \
             .order.return_value \
             .range.return_value \
             .execute.return_value = _make_execute_result([], count=0)

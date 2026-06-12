@@ -701,6 +701,21 @@ Delegates to `contact_repo.delete_contact()`. Returns `True` if the contact was 
 
 ---
 
+## 6. `todo_estimate_service.py` — Background AI Time Estimates
+
+Generates an estimated hour range for a newly created to-do task. Scheduled as a FastAPI `BackgroundTasks` job from `POST /todos`, so the creator never waits on the LLM — the task is returned immediately with `estimate_status = "pending"` and the estimate appears on a later refresh.
+
+### `generate_estimate(db, todo_id) → None`
+
+1. Fetches the todo; **no-ops unless `estimate_status == "pending"`** (the idempotency guard — duplicate invocations cannot double-spend tokens).
+2. Short-circuits to `estimate_status = "failed"` if `OPENAI_API_KEY` is unset (no API call attempted).
+3. Pulls up to 10 calibration examples via `todo_repo.get_calibration_examples()` and calls `todo_estimator.estimate_todo_hours()` exactly once.
+4. On success writes `estimated_hours_min/max` + `estimate_status = "done"`; on any failure writes the **terminal** `estimate_status = "failed"`.
+
+Never raises and never retries. Combined with the fact that only `create_todo` schedules it, each task costs at most one OpenAI estimation call, ever — edits, re-ticks, and `actual_hours` reports never re-trigger estimation.
+
+---
+
 ## Architecture: SOLID Principles
 
 ### Single Responsibility

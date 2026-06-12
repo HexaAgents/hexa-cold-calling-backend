@@ -436,6 +436,244 @@ class TestPermissions:
         assert updated["assigned_to_id"] is None
 
 
+class TestTimeEstimates:
+    @patch("app.routers.todos.todo_estimate_service.generate_estimate")
+    def test_create_marks_pending_and_schedules_one_estimate(self, mock_generate, client, mock_supabase):
+        created = {**SAMPLE_TODO, "estimate_status": "pending"}
+        mock_supabase.table.return_value \
+            .insert.return_value \
+            .execute.return_value = _result([created])
+
+        resp = client.post("/todos", json={"title": "Estimate me"})
+        assert resp.status_code == 201
+        assert resp.json()["estimate_status"] == "pending"
+
+        inserted = mock_supabase.table.return_value.insert.call_args_list[0][0][0]
+        assert inserted["estimate_status"] == "pending"
+        # Exactly one background estimation task per creation.
+        mock_generate.assert_called_once()
+        assert mock_generate.call_args.args[1] == "todo-1"
+
+    @patch("app.routers.todos.todo_estimate_service.generate_estimate")
+    def test_patch_never_triggers_estimation(self, mock_generate, client, mock_supabase):
+        # Token-usage safeguard: edits, re-ticks, and hour reports never
+        # re-estimate - only creation does.
+        _set_get_todo(mock_supabase, SAMPLE_TODO)
+        mock_supabase.table.return_value \
+            .update.return_value \
+            .eq.return_value \
+            .execute.return_value = _result([SAMPLE_TODO])
+
+        client.patch("/todos/todo-1", json={"title": "Renamed"})
+        client.patch("/todos/todo-1", json={"is_done": True})
+        client.patch("/todos/todo-1", json={"actual_hours": 2.5})
+
+        mock_generate.assert_not_called()
+
+    def test_patch_actual_hours_passes_through(self, client, mock_supabase):
+        _set_get_todo(mock_supabase, SAMPLE_TODO)
+        mock_supabase.table.return_value \
+            .update.return_value \
+            .eq.return_value \
+            .execute.return_value = _result([{**SAMPLE_TODO, "is_done": True, "actual_hours": 2.5}])
+
+        resp = client.patch("/todos/todo-1", json={"is_done": True, "actual_hours": 2.5})
+        assert resp.status_code == 200
+        assert resp.json()["actual_hours"] == 2.5
+
+        updated = mock_supabase.table.return_value.update.call_args[0][0]
+        assert updated["actual_hours"] == 2.5
+
+    def test_actual_hours_out_of_bounds_rejected(self, client, mock_supabase):
+        # Bounded so junk values can't poison the calibration examples.
+        _set_get_todo(mock_supabase, SAMPLE_TODO)
+        for bad in (0, 0.05, -1, 501, 99999):
+            resp = client.patch("/todos/todo-1", json={"actual_hours": bad})
+            assert resp.status_code == 422, f"actual_hours={bad} should be rejected"
+
+    def test_actual_hours_boundaries_accepted(self, client, mock_supabase):
+        _set_get_todo(mock_supabase, SAMPLE_TODO)
+        mock_supabase.table.return_value \
+            .update.return_value \
+            .eq.return_value \
+            .execute.return_value = _result([SAMPLE_TODO])
+
+        for ok in (0.1, 500):
+            resp = client.patch("/todos/todo-1", json={"actual_hours": ok})
+            assert resp.status_code == 200, f"actual_hours={ok} should be accepted"
+
+    def test_estimate_fields_returned_in_list(self, client, mock_supabase):
+        row = {
+            **SAMPLE_TODO,
+            "estimated_hours_min": 1.5,
+            "estimated_hours_max": 3.0,
+            "estimate_status": "done",
+            "actual_hours": 2.0,
+        }
+        mock_supabase.table.return_value \
+            .select.return_value \
+            .order.return_value \
+            .order.return_value \
+            .order.return_value \
+            .execute.return_value = _result([row])
+        mock_supabase.table.return_value \
+            .select.return_value \
+            .in_.return_value \
+            .execute.return_value = _result([])
+
+        resp = client.get("/todos")
+        assert resp.status_code == 200
+        body = resp.json()[0]
+        assert body["estimated_hours_min"] == 1.5
+        assert body["estimated_hours_max"] == 3.0
+        assert body["estimate_status"] == "done"
+        assert body["actual_hours"] == 2.0
+
+
+class TestRecurrence:
+    RECURRING = {
+        **SAMPLE_TODO,
+        "recurrence_interval": 1,
+        "recurrence_unit": "week",
+        "recurrence_spawned": False,
+    }
+
+    def test_create_with_recurrence_persists_rule(self, client, mock_supabase):
+        mock_supabase.table.return_value \
+            .insert.return_value \
+            .execute.return_value = _result([self.RECURRING])
+
+        resp = client.post(
+            "/todos",
+            json={"title": "Weekly report", "recurrence_interval": 1, "recurrence_unit": "week"},
+        )
+        assert resp.status_code == 201
+        assert resp.json()["recurrence_interval"] == 1
+        assert resp.json()["recurrence_unit"] == "week"
+
+        inserted = mock_supabase.table.return_value.insert.call_args_list[0][0][0]
+        assert inserted["recurrence_interval"] == 1
+        assert inserted["recurrence_unit"] == "week"
+
+    def test_create_rejects_interval_without_unit(self, client, mock_supabase):
+        resp = client.post("/todos", json={"title": "Broken", "recurrence_interval": 2})
+        assert resp.status_code == 422
+
+    def test_create_rejects_unit_without_interval(self, client, mock_supabase):
+        resp = client.post("/todos", json={"title": "Broken", "recurrence_unit": "day"})
+        assert resp.status_code == 422
+
+    def test_create_rejects_bad_interval_and_unit(self, client, mock_supabase):
+        for body in (
+            {"title": "Bad", "recurrence_interval": 0, "recurrence_unit": "day"},
+            {"title": "Bad", "recurrence_interval": 400, "recurrence_unit": "day"},
+            {"title": "Bad", "recurrence_interval": 1, "recurrence_unit": "year"},
+        ):
+            resp = client.post("/todos", json=body)
+            assert resp.status_code == 422, f"{body} should be rejected"
+
+    def test_completing_recurring_task_spawns_next_occurrence(self, client, mock_supabase):
+        _set_get_todo(mock_supabase, self.RECURRING)
+        mock_supabase.table.return_value \
+            .update.return_value \
+            .eq.return_value \
+            .execute.return_value = _result([{**self.RECURRING, "is_done": True}])
+        mock_supabase.table.return_value \
+            .insert.return_value \
+            .execute.return_value = _result([{**self.RECURRING, "id": "todo-next"}])
+
+        resp = client.patch("/todos/todo-1", json={"is_done": True})
+        assert resp.status_code == 200
+        assert resp.json()["is_done"] is True
+
+        inserted = mock_supabase.table.return_value.insert.call_args_list[0][0][0]
+        assert inserted["title"] == self.RECURRING["title"]
+        assert inserted["recurrence_interval"] == 1
+        assert inserted["recurrence_unit"] == "week"
+        # Next occurrence starts open with an advanced due date.
+        assert "is_done" not in inserted or not inserted["is_done"]
+        assert inserted["due_date"] > self.RECURRING["due_date"]
+        # The completed row is flagged so it can never spawn twice.
+        update_payloads = [
+            call[0][0] for call in mock_supabase.table.return_value.update.call_args_list
+        ]
+        assert {"recurrence_spawned": True} in update_payloads
+
+    def test_already_spawned_row_does_not_respawn(self, client, mock_supabase):
+        _set_get_todo(mock_supabase, {**self.RECURRING, "recurrence_spawned": True})
+        mock_supabase.table.return_value \
+            .update.return_value \
+            .eq.return_value \
+            .execute.return_value = _result([
+                {**self.RECURRING, "is_done": True, "recurrence_spawned": True}
+            ])
+
+        resp = client.patch("/todos/todo-1", json={"is_done": True})
+        assert resp.status_code == 200
+        mock_supabase.table.return_value.insert.assert_not_called()
+
+    def test_completing_non_recurring_task_spawns_nothing(self, client, mock_supabase):
+        _set_get_todo(mock_supabase, SAMPLE_TODO)
+        mock_supabase.table.return_value \
+            .update.return_value \
+            .eq.return_value \
+            .execute.return_value = _result([{**SAMPLE_TODO, "is_done": True}])
+
+        resp = client.patch("/todos/todo-1", json={"is_done": True})
+        assert resp.status_code == 200
+        mock_supabase.table.return_value.insert.assert_not_called()
+
+    def test_unticking_recurring_task_spawns_nothing(self, client, mock_supabase):
+        _set_get_todo(mock_supabase, {**self.RECURRING, "is_done": True})
+        mock_supabase.table.return_value \
+            .update.return_value \
+            .eq.return_value \
+            .execute.return_value = _result([self.RECURRING])
+
+        resp = client.patch("/todos/todo-1", json={"is_done": False})
+        assert resp.status_code == 200
+        mock_supabase.table.return_value.insert.assert_not_called()
+
+    def test_patch_can_change_recurrence_rule(self, client, mock_supabase):
+        _set_get_todo(mock_supabase, self.RECURRING)
+        mock_supabase.table.return_value \
+            .update.return_value \
+            .eq.return_value \
+            .execute.return_value = _result([
+                {**self.RECURRING, "recurrence_interval": 2, "recurrence_unit": "month"}
+            ])
+
+        resp = client.patch(
+            "/todos/todo-1", json={"recurrence_interval": 2, "recurrence_unit": "month"}
+        )
+        assert resp.status_code == 200
+        updated = mock_supabase.table.return_value.update.call_args[0][0]
+        assert updated["recurrence_interval"] == 2
+        assert updated["recurrence_unit"] == "month"
+
+    def test_patch_can_clear_recurrence(self, client, mock_supabase):
+        _set_get_todo(mock_supabase, self.RECURRING)
+        mock_supabase.table.return_value \
+            .update.return_value \
+            .eq.return_value \
+            .execute.return_value = _result([
+                {**self.RECURRING, "recurrence_interval": None, "recurrence_unit": None}
+            ])
+
+        resp = client.patch(
+            "/todos/todo-1", json={"recurrence_interval": None, "recurrence_unit": None}
+        )
+        assert resp.status_code == 200
+        updated = mock_supabase.table.return_value.update.call_args[0][0]
+        assert updated["recurrence_interval"] is None
+        assert updated["recurrence_unit"] is None
+
+    def test_patch_rejects_partial_recurrence(self, client, mock_supabase):
+        _set_get_todo(mock_supabase, self.RECURRING)
+        resp = client.patch("/todos/todo-1", json={"recurrence_interval": 2})
+        assert resp.status_code == 422
+
+
 class TestAssignees:
     def test_list_assignees_returns_first_names(self, client, mock_supabase):
         mock_supabase.rpc.return_value.execute.return_value = _result([
