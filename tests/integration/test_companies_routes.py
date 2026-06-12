@@ -123,3 +123,106 @@ class TestCompanyDetail:
         data = resp.json()
         assert data["company"]["website"] == "https://acme.com"
         assert data["company"]["employees"] == "50"
+
+
+SAMPLE_FLAG = {
+    "id": "f-1",
+    "company_key": "acme corp",
+    "company_name": "ACME Corp",
+    "reason": "Already has an AI provider",
+    "details": "Mentioned on a call in June",
+    "flagged_by": "u-1",
+    "flagged_by_name": "Jane Doe",
+    "created_at": "2026-06-12T00:00:00+00:00",
+    "updated_at": "2026-06-12T00:00:00+00:00",
+}
+
+
+class TestGetCompanyFlag:
+    @patch("app.repositories.company_flag_repo.get_flag")
+    def test_returns_flag(self, mock_get, client, mock_supabase):
+        mock_get.return_value = SAMPLE_FLAG
+
+        resp = client.get("/companies/flag?company_name=ACME+Corp")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["reason"] == "Already has an AI provider"
+        assert data["flagged_by_name"] == "Jane Doe"
+        mock_get.assert_called_once_with(mock_supabase, "ACME Corp")
+
+    @patch("app.repositories.company_flag_repo.get_flag")
+    def test_returns_null_when_not_flagged(self, mock_get, client, mock_supabase):
+        mock_get.return_value = None
+
+        resp = client.get("/companies/flag?company_name=Unflagged+Co")
+
+        assert resp.status_code == 200
+        assert resp.json() is None
+
+    def test_requires_company_name(self, client, mock_supabase):
+        resp = client.get("/companies/flag")
+
+        assert resp.status_code == 422
+
+
+class TestSetCompanyFlag:
+    @patch("app.repositories.company_flag_repo.upsert_flag")
+    def test_creates_flag(self, mock_upsert, client, mock_supabase):
+        mock_upsert.return_value = SAMPLE_FLAG
+
+        resp = client.put(
+            "/companies/flag",
+            json={
+                "company_name": "ACME Corp",
+                "reason": "Already has an AI provider",
+                "details": "Mentioned on a call in June",
+            },
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["reason"] == "Already has an AI provider"
+        kwargs = mock_upsert.call_args.kwargs
+        assert kwargs["company_name"] == "ACME Corp"
+        assert kwargs["reason"] == "Already has an AI provider"
+        assert kwargs["details"] == "Mentioned on a call in June"
+        assert kwargs["flagged_by"]
+
+    @patch("app.repositories.company_flag_repo.upsert_flag")
+    def test_details_optional(self, mock_upsert, client, mock_supabase):
+        mock_upsert.return_value = {**SAMPLE_FLAG, "details": None}
+
+        resp = client.put(
+            "/companies/flag",
+            json={"company_name": "ACME Corp", "reason": "Too large for us to service"},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["details"] is None
+
+    def test_rejects_empty_reason(self, client, mock_supabase):
+        resp = client.put(
+            "/companies/flag",
+            json={"company_name": "ACME Corp", "reason": ""},
+        )
+
+        assert resp.status_code == 422
+
+
+class TestRemoveCompanyFlag:
+    @patch("app.repositories.company_flag_repo.delete_flag")
+    def test_removes_flag(self, mock_delete, client, mock_supabase):
+        mock_delete.return_value = True
+
+        resp = client.delete("/companies/flag?company_name=ACME+Corp")
+
+        assert resp.status_code == 200
+        mock_delete.assert_called_once_with(mock_supabase, "ACME Corp")
+
+    @patch("app.repositories.company_flag_repo.delete_flag")
+    def test_404_when_not_flagged(self, mock_delete, client, mock_supabase):
+        mock_delete.return_value = False
+
+        resp = client.delete("/companies/flag?company_name=Unflagged+Co")
+
+        assert resp.status_code == 404

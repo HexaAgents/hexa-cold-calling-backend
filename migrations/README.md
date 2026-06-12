@@ -13,6 +13,7 @@ This directory contains ordered Supabase/Postgres SQL migrations. Apply files in
 - `028_add_discarded_csv.sql` and `030_add_input_csv.sql`: store the discarded-rows CSV and the original upload CSV on import batches for download.
 - `029_reactivate_stale_didnt_pickup.sql`: shared-pool refeed of stale "didn't pick up" contacts (claimable by any caller) plus the reactivation function.
 - `031_call_priority_order.sql`: claim queue priority — least-called first, then later local time of day, then higher score (replaces the old retries-first, score-only ordering).
+- `032_company_flags.sql`: `company_flags` table — one informational flag per company (keyed by normalized company name) with a reason, optional details, and who flagged it. Surfaced as a warning banner on the call tracker; never removes contacts from the calling pool.
 
 ## To-Do Tables
 

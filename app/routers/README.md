@@ -671,5 +671,16 @@ HTTP Request
 | `notes.py` | *(none)* | `GET /contacts/{id}/notes`, `POST /contacts/{id}/notes`, `PATCH /notes/{id}`, `DELETE /notes/{id}` | `note_repo` |
 | `settings.py` | `/settings` | `GET /`, `PUT /` | `settings_repo` |
 | `todos.py` | `/todos` | `GET /`, `GET /assignees`, `GET /{id}`, `POST /`, `PATCH /{id}`, `DELETE /{id}` | `todo_repo`, `email_service` for assignment notifications |
+| `companies.py` | `/companies` | `GET /`, `GET /detail`, `GET /flag`, `PUT /flag`, `DELETE /flag` | `contact_repo`, `company_flag_repo` |
 
-> Additional routers mounted in `app/main.py` (`companies`, `scheduled_calls`, `apollo_webhooks`, `apollo_enrichment`, `productivity`, and `email`) follow the same structural contract described above. Keep this quick reference current when adding endpoints so the API surface can be audited from one place.
+> Additional routers mounted in `app/main.py` (`scheduled_calls`, `apollo_webhooks`, `apollo_enrichment`, `productivity`, and `email`) follow the same structural contract described above. Keep this quick reference current when adding endpoints so the API surface can be audited from one place.
+
+### Company flags (`companies.py`)
+
+The three `/companies/flag` endpoints manage one informational flag per company:
+
+- `GET /flag?company_name=...` — returns the flag (`CompanyFlagOut`) or JSON `null`. The call tracker queries this whenever a contact is displayed and renders a warning banner if a flag exists.
+- `PUT /flag` — body `{company_name, reason, details?}`. Upserts (one flag per company, keyed by normalized name), recording the current user as `flagged_by`/`flagged_by_name`. Reason is required and non-empty (422 otherwise).
+- `DELETE /flag?company_name=...` — removes the flag; 404 if the company isn't flagged.
+
+Flags are deliberately **not** consulted by `claim_next_contact` or any pool/eligibility logic — flagged companies keep flowing through the call tracker, the flag only surfaces as a warning with the recorded reason.

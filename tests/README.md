@@ -26,6 +26,7 @@ tests/
 │   ├── test_email_tracking_service.py   # Gmail sync, header parsing, user-level sync
 │   ├── test_scheduled_call_repo.py      # Scheduled calls CRUD and due-call queries
 │   ├── test_companies_repo.py           # Company grouping, search, contacts by company
+│   ├── test_company_flag_repo.py        # Company flags: key normalization, get/upsert/delete, blank-name short circuits
 │   ├── test_todo_repo.py                # To-Do assignee normalization and legacy field mirroring
 │   └── test_todo_schema.py              # To-Do schemas: title-only create, optional fields, multi-assignees
 └── integration/
@@ -42,7 +43,7 @@ tests/
     ├── test_productivity_routes.py      # Productivity aggregation
     ├── test_email_routes.py             # Gmail OAuth, send, draft, logs endpoints
     ├── test_email_tracking_routes.py    # Email tracking sync, list, thread endpoints
-    ├── test_companies_routes.py         # Companies list + detail endpoints
+    ├── test_companies_routes.py         # Companies list + detail + flag (get/upsert/remove) endpoints
     └── test_todos_routes.py             # To-Do CRUD, due-date ordering, multi-assignee permissions, notifications
 ```
 

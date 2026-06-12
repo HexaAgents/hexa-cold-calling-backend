@@ -56,7 +56,7 @@ Copy `.env.example` to `.env` for local development. Keep `.env` local and never
 ## API Areas
 
 - Auth: login and current-user introspection.
-- Contacts and companies: contact CRUD, search, grouping, phone cleanup, notes, and call history.
+- Contacts and companies: contact CRUD, search, grouping, phone cleanup, notes, call history, and per-company informational flags (warning banners on the call tracker that never affect pool eligibility).
 - Calls: browser token generation, claim/release queueing, call logging, callbacks, and outcome tracking.
 - Imports: CSV upload, scoring/enrichment pipeline, batch status, filtered + discarded CSV downloads, and stale import recovery.
 - Twilio and SMS: voice TwiML/status webhooks plus direct/scheduled SMS.

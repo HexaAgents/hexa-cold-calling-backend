@@ -20,6 +20,7 @@ Each file maps to **one database table** (Single Responsibility). `contact_repo`
 | `email_repo.py` | `user_gmail_tokens`, `email_logs` | Gmail OAuth token storage, email send logging |
 | `email_tracking_repo.py` | `tracked_emails` | Upsert synced Gmail messages, contact summaries with reply status, per-contact thread retrieval |
 | `todo_repo.py` | `todos`, `todo_assignees` | CRUD for the standalone team to-do list; lists unfinished tasks before finished tasks, orders each group by closest due date (no-due-date last), hydrates multi-assignee lists, and mirrors the first assignee into legacy columns during the transition. |
+| `company_flag_repo.py` | `company_flags` | One informational flag per company (get/upsert/delete) keyed by normalized company name; surfaced as a call-tracker warning, never affects pool eligibility |
 
 ---
 
@@ -298,6 +299,37 @@ def get_recent_batches(db: Client, limit: int = 10) -> list[dict]:
 ```
 
 Returns the most recent import batches, ordered newest-first, capped at `limit` (default 10). Powers the import history view in the frontend.
+
+---
+
+## company_flag_repo.py
+
+Backs the company-flag feature (migration `032_company_flags.sql`): a single informational flag per company shown as a warning banner on the call tracker. Flags **never** affect whether contacts are claimable — they only annotate.
+
+### `company_flag_key()`
+
+```python
+def company_flag_key(company_name: str) -> str:
+    return (company_name or "").strip().lower()
+```
+
+Normalizes a company name into the unique `company_key` used by the table. Matches how the companies pages group contacts (by name), so a flag set from any contact of "ACME Corp" applies to every contact whose `company_name` normalizes to `"acme corp"`. Handles `None` and whitespace-only input by returning `""`.
+
+### `get_flag()`
+
+Returns the flag row for a company or `None`. Short-circuits without touching the database when the normalized key is empty (e.g. a contact with a blank company name can never be flagged).
+
+### `upsert_flag()`
+
+```python
+def upsert_flag(db, company_name, reason, details, flagged_by, flagged_by_name) -> dict:
+```
+
+Creates or replaces the flag using `upsert(..., on_conflict="company_key")` — there is intentionally **one flag per company**, so re-flagging overwrites the previous reason/details rather than accumulating rows. Stores both the flagger's user id (`flagged_by`) and display name (`flagged_by_name`) so the banner can show who set the flag without a join. `updated_at` is refreshed on every upsert.
+
+### `delete_flag()`
+
+Deletes the flag by normalized key and returns `True` if a row was actually removed (the router translates `False` into a 404). Short-circuits on blank names like `get_flag()`.
 
 ---
 

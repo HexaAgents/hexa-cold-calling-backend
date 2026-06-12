@@ -153,3 +153,21 @@ Full read model returned by the list, detail, create, and update endpoints, incl
 ### `TodoAssignee`
 
 Minimal `{ id, first_name }` shape for `GET /todos/assignees`, which lists platform users available to assign (first names via the `get_auth_users()` RPC).
+
+---
+
+## company_flag.py
+
+Schemas for the per-company informational flags shown on the call tracker (migration `032_company_flags.sql`).
+
+### `CompanyFlagCreate`
+
+Request body for `PUT /companies/flag`:
+
+- **`company_name: str`**: Which company to flag (`min_length=1`). Normalized server-side into the unique `company_key`.
+- **`reason: str`**: The warning reason (`min_length=1` — an empty reason is a 422). The frontend offers suggested reasons (already has an AI provider, too large to service, existing customer/partner, asked not to be contacted) but any free-text reason is valid.
+- **`details: str | None`**: Optional extra context for callers.
+
+### `CompanyFlagOut`
+
+Read model for `GET /companies/flag` and the `PUT` response. Includes the reason, optional details, `flagged_by` / `flagged_by_name` attribution, and timestamps. `extra="ignore"` drops internal columns like `company_key` from the API response.
