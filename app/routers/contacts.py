@@ -5,6 +5,7 @@ from enum import Enum
 from fastapi import APIRouter, Body, HTTPException, Query
 
 from app.dependencies import SupabaseDep, CurrentUserDep
+from app.repositories import contact_repo
 from app.schemas.contact import ContactOut, ContactUpdate, ContactListOut
 from app.services import contact_service
 
@@ -48,6 +49,17 @@ def get_locations(current_user: CurrentUserDep, db: SupabaseDep):
         values = sorted({row[field] for row in (result.data or []) if row.get(field)})
         locations[key] = values
     return locations
+
+
+@router.get("/location-counts")
+def get_location_counts(current_user: CurrentUserDep, db: SupabaseDep):
+    """Counts of callable contacts per location for the call tracker.
+
+    Mirrors claim_next_contact availability (not hidden, not rejected, has a
+    phone, fresh or retry-due) so callers can see how many contacts remain in
+    each location while calling.
+    """
+    return contact_repo.get_callable_location_counts(db)
 
 
 @router.get("/{contact_id}", response_model=ContactOut)

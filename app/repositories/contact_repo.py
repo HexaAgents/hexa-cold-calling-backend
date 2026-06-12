@@ -191,6 +191,74 @@ def _score_row_rank(row: dict) -> tuple[int, int]:
     )
 
 
+_LOCATION_PAGE = 1000
+
+
+def get_callable_location_counts(db: Client) -> dict:
+    """Counts of callable contacts grouped by country, state, and city.
+
+    "Callable" mirrors the claim_next_contact availability rules: not hidden,
+    not rejected, has at least one phone number, and is either never called
+    (fresh) or a didnt_pick_up retry that is due. Contacts currently claimed
+    by a user are still counted — claims are transient.
+
+    Returns {"total", "countries", "states", "cities", "no_location"} where
+    each location list is [{"name", "count"}, ...] sorted by count descending.
+    """
+    now_iso = datetime.now(timezone.utc).isoformat()
+    country_counts: dict[str, int] = {}
+    state_counts: dict[str, int] = {}
+    city_counts: dict[str, int] = {}
+    total = 0
+    no_location = 0
+    offset = 0
+    while True:
+        result = (
+            db.table("contacts")
+            .select("city, state, country")
+            .or_("hidden.is.null,hidden.eq.false")
+            .or_("company_type.is.null,company_type.neq.rejected")
+            .or_("mobile_phone.not.is.null,work_direct_phone.not.is.null,corporate_phone.not.is.null")
+            .or_(
+                "call_outcome.is.null,"
+                f"and(call_outcome.eq.didnt_pick_up,retry_at.not.is.null,retry_at.lte.{now_iso})"
+            )
+            .range(offset, offset + _LOCATION_PAGE - 1)
+            .execute()
+        )
+        rows = result.data or []
+        for row in rows:
+            total += 1
+            country = (row.get("country") or "").strip()
+            state = (row.get("state") or "").strip()
+            city = (row.get("city") or "").strip()
+            if country:
+                country_counts[country] = country_counts.get(country, 0) + 1
+            if state:
+                state_counts[state] = state_counts.get(state, 0) + 1
+            if city:
+                city_counts[city] = city_counts.get(city, 0) + 1
+            if not (country or state or city):
+                no_location += 1
+        if len(rows) < _LOCATION_PAGE:
+            break
+        offset += _LOCATION_PAGE
+
+    def _ranked(counts: dict[str, int]) -> list[dict]:
+        return [
+            {"name": name, "count": count}
+            for name, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        ]
+
+    return {
+        "total": total,
+        "countries": _ranked(country_counts),
+        "states": _ranked(state_counts),
+        "cities": _ranked(city_counts),
+        "no_location": no_location,
+    }
+
+
 def release_stale_claims(db: Client) -> int:
     """Release contacts claimed more than STALE_CLAIM_HOURS ago with no outcome."""
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=STALE_CLAIM_HOURS)).isoformat()

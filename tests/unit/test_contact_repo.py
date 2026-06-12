@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 from app.repositories.contact_repo import (
     _score_row_rank,
     contact_identity_key,
+    get_callable_location_counts,
     get_existing_identity_keys,
     get_existing_scores,
 )
@@ -198,6 +199,63 @@ class TestGetExistingScores:
         get_existing_scores(db, websites)
         in_mock = db.table.return_value.select.return_value.in_
         assert in_mock.call_count == 3  # 120 websites / 50 per chunk
+
+
+def _location_db(*pages):
+    """Mock supabase client for the callable-location-counts query.
+
+    The query chains several .or_() filters before .range().execute(), so the
+    query mock returns itself from every builder method.
+    """
+    db = MagicMock()
+    query = MagicMock()
+    query.or_.return_value = query
+    query.range.return_value = query
+    query.execute.side_effect = [MagicMock(data=list(page)) for page in pages]
+    db.table.return_value.select.return_value = query
+    return db
+
+
+class TestGetCallableLocationCounts:
+    def test_counts_grouped_per_level_and_ranked(self):
+        db = _location_db([
+            {"city": "Houston", "state": "Texas", "country": "United States"},
+            {"city": "Dallas", "state": "Texas", "country": "United States"},
+            {"city": "Toronto", "state": "Ontario", "country": "Canada"},
+        ])
+        res = get_callable_location_counts(db)
+        assert res["total"] == 3
+        assert res["states"][0] == {"name": "Texas", "count": 2}
+        assert res["countries"][0] == {"name": "United States", "count": 2}
+        assert {"name": "Ontario", "count": 1} in res["states"]
+        assert res["no_location"] == 0
+
+    def test_blank_locations_counted_as_no_location(self):
+        db = _location_db([
+            {"city": "", "state": None, "country": ""},
+            {"city": "Houston", "state": "", "country": ""},
+        ])
+        res = get_callable_location_counts(db)
+        assert res["total"] == 2
+        assert res["no_location"] == 1  # only the fully blank row
+        assert res["cities"] == [{"name": "Houston", "count": 1}]
+        assert res["states"] == []
+
+    def test_ties_sorted_alphabetically(self):
+        db = _location_db([
+            {"city": "", "state": "Texas", "country": ""},
+            {"city": "", "state": "Ohio", "country": ""},
+        ])
+        res = get_callable_location_counts(db)
+        assert [s["name"] for s in res["states"]] == ["Ohio", "Texas"]
+
+    def test_paginates_until_short_page(self):
+        full_page = [{"city": "", "state": "Texas", "country": ""} for _ in range(1000)]
+        second_page = [{"city": "", "state": "Texas", "country": ""}]
+        db = _location_db(full_page, second_page)
+        res = get_callable_location_counts(db)
+        assert res["total"] == 1001
+        assert res["states"] == [{"name": "Texas", "count": 1001}]
 
 
 class TestScoreRowRank:

@@ -59,6 +59,27 @@ class TestGetLocations:
         assert "countries" in body
 
 
+class TestLocationCounts:
+    def test_returns_callable_counts_per_location(self, client, mock_supabase):
+        query = MagicMock()
+        query.or_.return_value = query
+        query.range.return_value = query
+        query.execute.return_value = _make_execute_result([
+            {"city": "Houston", "state": "Texas", "country": "United States"},
+            {"city": "", "state": "Texas", "country": "United States"},
+            {"city": "", "state": "", "country": ""},
+        ])
+        mock_supabase.table.return_value.select.return_value = query
+
+        resp = client.get("/contacts/location-counts")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total"] == 3
+        assert body["states"][0] == {"name": "Texas", "count": 2}
+        assert body["cities"] == [{"name": "Houston", "count": 1}]
+        assert body["no_location"] == 1
+
+
 def _make_execute_result(data, count=None):
     result = MagicMock()
     result.data = data
