@@ -110,10 +110,30 @@ def run_digest_if_due(db: Client, now: datetime) -> bool:
     if last_sent and date.fromisoformat(str(last_sent)) >= today:
         return False
 
-    sent = send_overdue_digests(db, today)
+    # Claim the day BEFORE sending anything. If we cannot durably record that
+    # today's digest is being handled (no settings row, or the bookkeeping
+    # column is missing), we must NOT send — otherwise every poll would resend
+    # and flood every recipient. Skipping one day's digest is the safe failure.
     settings_id = app_settings.get("id")
-    if settings_id:
+    if not settings_id:
+        logger.error(
+            "Overdue digest: no settings row to record send date; skipping to avoid a resend flood"
+        )
+        return False
+    try:
         settings_repo.update_settings(db, settings_id, {"overdue_digest_last_sent": today.isoformat()})
+    except Exception as exc:
+        logger.error(
+            "Overdue digest: could not record send date (%s); skipping to avoid a resend flood",
+            exc,
+        )
+        return False
+
+    # Trade-off: the day is now claimed. If all sends fail (e.g. Gmail is
+    # disconnected), today's digest is skipped rather than retried — the safe
+    # choice over flooding. Per-recipient failures are swallowed inside
+    # send_overdue_digests, and a disconnected sender returns 0 early.
+    sent = send_overdue_digests(db, today)
     logger.info("Overdue digest: sent %d emails for %s", sent, today.isoformat())
     return True
 

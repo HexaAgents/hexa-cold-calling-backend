@@ -184,3 +184,38 @@ class TestRunDigestIfDue:
 
         assert overdue_digest.run_digest_if_due(MagicMock(), utc_evening) is True
         assert mock_send.call_args.args[1] == TODAY
+
+    def test_does_not_send_when_recording_date_fails(self, mock_settings_repo, mock_send):
+        # Anti-flood guarantee: if the send date cannot be persisted (e.g. the
+        # overdue_digest_last_sent column is missing), we must send zero emails
+        # rather than resend on every poll.
+        mock_settings_repo.get_settings.return_value = {"id": "settings-1"}
+        mock_settings_repo.update_settings.side_effect = Exception("column does not exist")
+        after = datetime(2026, 6, 12, 17, 5, tzinfo=PACIFIC)
+
+        assert overdue_digest.run_digest_if_due(MagicMock(), after) is False
+        mock_send.assert_not_called()
+
+    def test_does_not_send_when_no_settings_row(self, mock_settings_repo, mock_send):
+        # No settings row means we cannot claim the day, so we must not send.
+        mock_settings_repo.get_settings.return_value = {}
+        after = datetime(2026, 6, 12, 17, 5, tzinfo=PACIFIC)
+
+        assert overdue_digest.run_digest_if_due(MagicMock(), after) is False
+        mock_send.assert_not_called()
+        mock_settings_repo.update_settings.assert_not_called()
+
+    def test_claims_the_day_before_sending(self, mock_settings_repo, mock_send):
+        # The send date must be recorded BEFORE any email is sent, so a crash
+        # mid-send cannot lead to a resend flood on the next poll.
+        order: list[str] = []
+        mock_settings_repo.update_settings.side_effect = lambda *a, **k: order.append("claim")
+        mock_send.side_effect = lambda *a, **k: (order.append("send"), 2)[1]
+        mock_settings_repo.get_settings.return_value = {
+            "id": "settings-1",
+            "overdue_digest_last_sent": "2026-06-11",
+        }
+        after = datetime(2026, 6, 12, 17, 5, tzinfo=PACIFIC)
+
+        assert overdue_digest.run_digest_if_due(MagicMock(), after) is True
+        assert order == ["claim", "send"]
