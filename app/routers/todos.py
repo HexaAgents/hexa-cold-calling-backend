@@ -197,13 +197,10 @@ def update_todo(todo_id: str, body: TodoUpdate, current_user: CurrentUserDep, db
         assignees_provided = True
         assignees = []
 
+    # The task's creator, anyone it is assigned to, or the super user may change
+    # it — including ticking it off (is_done).
     if not is_assigner and not is_assignee and not is_super:
         raise HTTPException(status_code=403, detail="Only the person who assigned or is assigned this task can change it")
-
-    # Ticking a task off (or unticking it) is reserved for the task's creator;
-    # the super user can complete anyone's task.
-    if "is_done" in provided and not is_assigner and not is_super:
-        raise HTTPException(status_code=403, detail="Only the person who set this task can mark it done")
 
     if not provided and not assignees_provided:
         return TodoOut(**existing)

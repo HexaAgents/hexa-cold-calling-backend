@@ -380,13 +380,31 @@ class TestPermissions:
         updated = mock_supabase.table.return_value.update.call_args[0][0]
         assert updated["is_done"] is True
 
-    def test_assignee_cannot_mark_done(self, client, mock_supabase):
+    def test_assignee_can_mark_done(self, client, mock_supabase):
         # Assigned by someone else; the current user is only the assignee.
-        # Completion is reserved for the task's creator (and the super user).
+        # The assignee may tick the task off, not just the creator.
         _set_get_todo(mock_supabase, {
             **SAMPLE_TODO,
             "assigned_by_id": "someone-else",
             "assigned_to_id": "test-user-id",
+        })
+        mock_supabase.table.return_value \
+            .update.return_value \
+            .eq.return_value \
+            .execute.return_value = _result([{**SAMPLE_TODO, "is_done": True}])
+
+        resp = client.patch("/todos/todo-1", json={"is_done": True})
+        assert resp.status_code == 200
+        assert resp.json()["is_done"] is True
+        updated = mock_supabase.table.return_value.update.call_args[0][0]
+        assert updated["is_done"] is True
+
+    def test_non_assignee_cannot_mark_done(self, client, mock_supabase):
+        # Neither the creator nor an assignee may tick the task off.
+        _set_get_todo(mock_supabase, {
+            **SAMPLE_TODO,
+            "assigned_by_id": "someone-else",
+            "assigned_to_id": "another-person",
         })
 
         resp = client.patch("/todos/todo-1", json={"is_done": True})
