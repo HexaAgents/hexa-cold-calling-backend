@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+from fastapi.testclient import TestClient
+
 
 SAMPLE_TODO = {
     "id": "todo-1",
@@ -30,6 +33,25 @@ def _set_get_todo(mock_supabase, row):
         .select.return_value \
         .eq.return_value \
         .execute.return_value = _result([row] if row else [])
+
+
+@pytest.fixture
+def ishaan_client(mock_supabase):
+    """Client authenticated as the super user who may tick off any task."""
+    from app.main import app
+    from app.dependencies import get_supabase, get_current_user
+
+    app.dependency_overrides[get_supabase] = lambda: mock_supabase
+    app.dependency_overrides[get_current_user] = lambda: {
+        "id": "ishaan-user-id",
+        "email": "ishaan@hexaagents.com",
+        "full_name": "Ishaan Makkar",
+    }
+
+    with TestClient(app) as c:
+        yield c
+
+    app.dependency_overrides.clear()
 
 
 class TestCreateTodo:
@@ -358,19 +380,32 @@ class TestPermissions:
         updated = mock_supabase.table.return_value.update.call_args[0][0]
         assert updated["is_done"] is True
 
-    def test_assignee_can_mark_done(self, client, mock_supabase):
-        # Assigned by someone else, but the current user is the assignee.
+    def test_assignee_cannot_mark_done(self, client, mock_supabase):
+        # Assigned by someone else; the current user is only the assignee.
+        # Completion is reserved for the task's creator (and the super user).
         _set_get_todo(mock_supabase, {
             **SAMPLE_TODO,
             "assigned_by_id": "someone-else",
             "assigned_to_id": "test-user-id",
+        })
+
+        resp = client.patch("/todos/todo-1", json={"is_done": True})
+        assert resp.status_code == 403
+        mock_supabase.table.return_value.update.assert_not_called()
+
+    def test_super_user_can_mark_anyones_task_done(self, ishaan_client, mock_supabase):
+        # Ishaan is neither the creator nor an assignee of this task.
+        _set_get_todo(mock_supabase, {
+            **SAMPLE_TODO,
+            "assigned_by_id": "someone-else",
+            "assigned_to_id": "another-person",
         })
         mock_supabase.table.return_value \
             .update.return_value \
             .eq.return_value \
             .execute.return_value = _result([{**SAMPLE_TODO, "is_done": True}])
 
-        resp = client.patch("/todos/todo-1", json={"is_done": True})
+        resp = ishaan_client.patch("/todos/todo-1", json={"is_done": True})
         assert resp.status_code == 200
         assert resp.json()["is_done"] is True
         updated = mock_supabase.table.return_value.update.call_args[0][0]
@@ -436,98 +471,35 @@ class TestPermissions:
         assert updated["assigned_to_id"] is None
 
 
-class TestTimeEstimates:
-    @patch("app.routers.todos.todo_estimate_service.generate_estimate")
-    def test_create_marks_pending_and_schedules_one_estimate(self, mock_generate, client, mock_supabase):
-        created = {**SAMPLE_TODO, "estimate_status": "pending"}
-        mock_supabase.table.return_value \
-            .insert.return_value \
-            .execute.return_value = _result([created])
-
-        resp = client.post("/todos", json={"title": "Estimate me"})
-        assert resp.status_code == 201
-        assert resp.json()["estimate_status"] == "pending"
-
-        inserted = mock_supabase.table.return_value.insert.call_args_list[0][0][0]
-        assert inserted["estimate_status"] == "pending"
-        # Exactly one background estimation task per creation.
-        mock_generate.assert_called_once()
-        assert mock_generate.call_args.args[1] == "todo-1"
-
-    @patch("app.routers.todos.todo_estimate_service.generate_estimate")
-    def test_patch_never_triggers_estimation(self, mock_generate, client, mock_supabase):
-        # Token-usage safeguard: edits, re-ticks, and hour reports never
-        # re-estimate - only creation does.
-        _set_get_todo(mock_supabase, SAMPLE_TODO)
-        mock_supabase.table.return_value \
-            .update.return_value \
-            .eq.return_value \
-            .execute.return_value = _result([SAMPLE_TODO])
-
-        client.patch("/todos/todo-1", json={"title": "Renamed"})
-        client.patch("/todos/todo-1", json={"is_done": True})
-        client.patch("/todos/todo-1", json={"actual_hours": 2.5})
-
-        mock_generate.assert_not_called()
-
-    def test_patch_actual_hours_passes_through(self, client, mock_supabase):
-        _set_get_todo(mock_supabase, SAMPLE_TODO)
-        mock_supabase.table.return_value \
-            .update.return_value \
-            .eq.return_value \
-            .execute.return_value = _result([{**SAMPLE_TODO, "is_done": True, "actual_hours": 2.5}])
-
-        resp = client.patch("/todos/todo-1", json={"is_done": True, "actual_hours": 2.5})
+class TestEstimateDueDate:
+    @patch("app.routers.todos.settings.openai_api_key", "sk-test")
+    @patch("app.routers.todos.due_date_estimator.estimate_due_date", return_value="2026-06-16")
+    def test_returns_recommended_due_date(self, mock_estimate, client, mock_supabase):
+        resp = client.post(
+            "/todos/estimate-due-date",
+            json={"title": "Call back the lead", "description": "Before the demo"},
+        )
         assert resp.status_code == 200
-        assert resp.json()["actual_hours"] == 2.5
+        assert resp.json() == {"due_date": "2026-06-16"}
+        # Title and description are forwarded to the estimator.
+        args = mock_estimate.call_args
+        assert args.args[1] == "Call back the lead"
+        assert args.args[2] == "Before the demo"
 
-        updated = mock_supabase.table.return_value.update.call_args[0][0]
-        assert updated["actual_hours"] == 2.5
+    @patch("app.routers.todos.settings.openai_api_key", "")
+    def test_unconfigured_key_returns_503(self, client, mock_supabase):
+        resp = client.post("/todos/estimate-due-date", json={"title": "Anything"})
+        assert resp.status_code == 503
 
-    def test_actual_hours_out_of_bounds_rejected(self, client, mock_supabase):
-        # Bounded so junk values can't poison the calibration examples.
-        _set_get_todo(mock_supabase, SAMPLE_TODO)
-        for bad in (0, 0.05, -1, 501, 99999):
-            resp = client.patch("/todos/todo-1", json={"actual_hours": bad})
-            assert resp.status_code == 422, f"actual_hours={bad} should be rejected"
+    @patch("app.routers.todos.settings.openai_api_key", "sk-test")
+    @patch("app.routers.todos.due_date_estimator.estimate_due_date", return_value=None)
+    def test_estimator_failure_returns_502(self, mock_estimate, client, mock_supabase):
+        resp = client.post("/todos/estimate-due-date", json={"title": "Anything"})
+        assert resp.status_code == 502
 
-    def test_actual_hours_boundaries_accepted(self, client, mock_supabase):
-        _set_get_todo(mock_supabase, SAMPLE_TODO)
-        mock_supabase.table.return_value \
-            .update.return_value \
-            .eq.return_value \
-            .execute.return_value = _result([SAMPLE_TODO])
-
-        for ok in (0.1, 500):
-            resp = client.patch("/todos/todo-1", json={"actual_hours": ok})
-            assert resp.status_code == 200, f"actual_hours={ok} should be accepted"
-
-    def test_estimate_fields_returned_in_list(self, client, mock_supabase):
-        row = {
-            **SAMPLE_TODO,
-            "estimated_hours_min": 1.5,
-            "estimated_hours_max": 3.0,
-            "estimate_status": "done",
-            "actual_hours": 2.0,
-        }
-        mock_supabase.table.return_value \
-            .select.return_value \
-            .order.return_value \
-            .order.return_value \
-            .order.return_value \
-            .execute.return_value = _result([row])
-        mock_supabase.table.return_value \
-            .select.return_value \
-            .in_.return_value \
-            .execute.return_value = _result([])
-
-        resp = client.get("/todos")
-        assert resp.status_code == 200
-        body = resp.json()[0]
-        assert body["estimated_hours_min"] == 1.5
-        assert body["estimated_hours_max"] == 3.0
-        assert body["estimate_status"] == "done"
-        assert body["actual_hours"] == 2.0
+    def test_empty_title_rejected(self, client, mock_supabase):
+        resp = client.post("/todos/estimate-due-date", json={"title": ""})
+        assert resp.status_code == 422
 
 
 class TestRecurrence:

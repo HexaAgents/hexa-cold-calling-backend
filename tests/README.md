@@ -28,9 +28,7 @@ tests/
 │   ├── test_companies_repo.py           # Company grouping, search, contacts by company
 │   ├── test_company_flag_repo.py        # Company flags: key normalization, get/upsert/delete, blank-name short circuits
 │   ├── test_todo_repo.py                # To-Do assignee normalization and legacy field mirroring
-│   ├── test_todo_schema.py              # To-Do schemas: title-only create, optional fields, multi-assignees
-│   ├── test_todo_estimator.py           # AI time estimates: JSON parsing/clamping, prompt bounds, single-call guarantee
-│   └── test_todo_estimate_service.py    # Estimate service: pending guard, terminal failure, no-key short circuit
+│   └── test_todo_schema.py              # To-Do schemas: title-only create, optional fields, multi-assignees
 └── integration/
     ├── test_health.py                    # Health check endpoint
     ├── test_auth_routes.py               # Auth/me endpoints
@@ -46,7 +44,7 @@ tests/
     ├── test_email_routes.py             # Gmail OAuth, send, draft, logs endpoints
     ├── test_email_tracking_routes.py    # Email tracking sync, list, thread endpoints
     ├── test_companies_routes.py         # Companies list + detail + flag (get/upsert/remove) endpoints
-    └── test_todos_routes.py             # To-Do CRUD, due-date ordering, multi-assignee permissions, notifications, AI estimate scheduling + actual_hours bounds
+    └── test_todos_routes.py             # To-Do CRUD, due-date ordering, multi-assignee permissions, notifications
 ```
 
 Unit tests validate individual functions in complete isolation — every external dependency (Exa, OpenAI, Supabase) is replaced with a mock. Integration tests spin up a real FastAPI `TestClient` and make actual HTTP requests against the app, but still mock the database and authentication layers so no real credentials are needed.
@@ -58,7 +56,7 @@ Unit tests validate individual functions in complete isolation — every externa
 - Mock external providers at the boundary where the app calls them: Supabase, OpenAI, Exa, Twilio, Apollo, and Gmail should never make network calls in tests.
 - For permission-sensitive features, test both allowed and rejected users. The to-do suite covers assigner-only delete, assigner/assignee edit access, legacy assignee fallback, and canonical multi-assignee access.
 - For background work, keep task helpers injectable or patch their provider calls so tests do not require real credentials or long-running workers.
-- For LLM-backed features, pin down the token-usage safeguards: exactly-one-call guarantees, terminal failure states (no retry loops), bounded prompt inputs (capped example counts, truncated text), and that non-trigger endpoints make zero AI calls. The to-do estimator suites (`test_todo_estimator.py`, `test_todo_estimate_service.py`, and the estimate cases in `test_todos_routes.py`) are the reference pattern.
+- For LLM-backed features, pin down the token-usage safeguards: exactly-one-call guarantees, terminal failure states (no retry loops), bounded prompt inputs (capped example counts, truncated text), and that non-trigger endpoints make zero AI calls.
 
 ---
 

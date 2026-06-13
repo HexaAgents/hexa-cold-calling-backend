@@ -13,6 +13,17 @@ class TodoAssignee(BaseModel):
     first_name: str
 
 
+class DueDateEstimateRequest(BaseModel):
+    """Title/description typed so far in the create dialog; nothing persisted."""
+
+    title: str = Field(min_length=1)
+    description: str | None = None
+
+
+class DueDateEstimateResponse(BaseModel):
+    due_date: str
+
+
 def _validate_recurrence_pair(model: BaseModel) -> None:
     """Recurrence interval and unit must be set together (or cleared together)."""
     interval = getattr(model, "recurrence_interval", None)
@@ -47,9 +58,6 @@ class TodoUpdate(BaseModel):
     is_done: bool | None = None
     recurrence_interval: int | None = Field(default=None, ge=1, le=365)
     recurrence_unit: RecurrenceUnit | None = None
-    # Reported by whoever ticks the task off; bounded so junk values can't
-    # poison the estimation calibration examples.
-    actual_hours: float | None = Field(default=None, ge=0.1, le=500)
     # Distinguishes "unassign" (explicit null) from "leave unchanged" (omitted),
     # since assigned_to_id=None is also the value used to clear an assignee.
     unassign: bool = False
@@ -77,9 +85,5 @@ class TodoOut(BaseModel):
     recurrence_interval: int | None = None
     recurrence_unit: RecurrenceUnit | None = None
     recurrence_spawned: bool = False
-    estimated_hours_min: float | None = None
-    estimated_hours_max: float | None = None
-    estimate_status: str | None = None
-    actual_hours: float | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None

@@ -67,9 +67,6 @@ def spawn_next_occurrence(db: Client, completed: dict) -> dict | None:
     if not interval or not unit or completed.get("recurrence_spawned"):
         return None
 
-    # Carry the AI estimate over instead of re-estimating: the work is
-    # identical, and estimation is capped at one OpenAI call per task.
-    estimate_done = completed.get("estimate_status") == "done"
     data = {
         "title": completed["title"],
         "description": completed.get("description"),
@@ -78,9 +75,6 @@ def spawn_next_occurrence(db: Client, completed: dict) -> dict | None:
         "due_date": next_due_date(completed.get("due_date"), interval, unit),
         "recurrence_interval": interval,
         "recurrence_unit": unit,
-        "estimated_hours_min": completed.get("estimated_hours_min") if estimate_done else None,
-        "estimated_hours_max": completed.get("estimated_hours_max") if estimate_done else None,
-        "estimate_status": "done" if estimate_done else None,
     }
     assignees = [
         {"id": str(a["id"]), "first_name": a["first_name"]}

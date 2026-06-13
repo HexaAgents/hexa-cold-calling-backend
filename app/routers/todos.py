@@ -2,22 +2,34 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, HTTPException
 
 from app.config import settings
 from app.dependencies import SupabaseDep, CurrentUserDep
-from app.schemas.todo import TodoCreate, TodoUpdate, TodoOut, TodoAssignee
-from app.repositories import todo_repo, email_repo
-from app.services import email_service, todo_estimate_service, todo_recurrence_service
+from app.schemas.todo import (
+    TodoCreate,
+    TodoUpdate,
+    TodoOut,
+    TodoAssignee,
+    DueDateEstimateRequest,
+    DueDateEstimateResponse,
+)
+from app.repositories import todo_repo, email_repo, user_repo
+from app.scoring import due_date_estimator
+from app.services import email_service, todo_recurrence_service
 
 router = APIRouter(prefix="/todos", tags=["todos"])
 logger = logging.getLogger(__name__)
 
+# Ishaan can tick off any task, regardless of who created it.
+SUPER_USER_EMAIL = "ishaan@hexaagents.com"
 
-def _first_name(full_name: str | None, fallback: str = "") -> str:
-    if not full_name:
-        return fallback
-    return full_name.split(" ")[0]
+
+def _is_super_user(current_user: dict) -> bool:
+    return (current_user.get("email") or "").lower() == SUPER_USER_EMAIL
+
+
+_first_name = user_repo.first_name
 
 
 def _assignee_payload(assignees: list[TodoAssignee] | None, assigned_to_id: str | None, assigned_to_name: str | None) -> list[dict]:
@@ -32,21 +44,6 @@ def _assignee_payload(assignees: list[TodoAssignee] | None, assigned_to_id: str 
     for person in people:
         deduped[str(person.id)] = {"id": str(person.id), "first_name": person.first_name}
     return list(deduped.values())
-
-
-def _auth_user_directory(db: SupabaseDep) -> dict[str, dict]:
-    users_result = db.rpc("get_auth_users").execute()
-    rows = users_result.data if isinstance(users_result.data, list) else []
-    directory: dict[str, dict] = {}
-    for u in rows:
-        uid = str(u["id"])
-        meta = u.get("raw_user_meta_data") or {}
-        full_name = meta.get("full_name", u.get("email") or "Unknown")
-        directory[uid] = {
-            "email": u.get("email"),
-            "first_name": _first_name(full_name, "Unknown"),
-        }
-    return directory
 
 
 def _notify_new_assignees(
@@ -68,7 +65,7 @@ def _notify_new_assignees(
         return
 
     try:
-        directory = _auth_user_directory(db)
+        directory = user_repo.get_auth_user_directory(db)
     except Exception as exc:
         logger.warning("Could not load users for todo assignment notifications: %s", exc)
         return
@@ -126,6 +123,26 @@ def list_assignees(current_user: CurrentUserDep, db: SupabaseDep):
     return assignees
 
 
+@router.post("/estimate-due-date", response_model=DueDateEstimateResponse)
+def estimate_due_date(body: DueDateEstimateRequest, current_user: CurrentUserDep):
+    """Recommend a due date for the task being typed in the create dialog.
+
+    Synchronous and stateless: one bounded OpenAI call, nothing persisted.
+    """
+    if not settings.openai_api_key:
+        raise HTTPException(status_code=503, detail="Due date estimation is not configured")
+
+    due_date = due_date_estimator.estimate_due_date(
+        settings.openai_api_key,
+        body.title,
+        body.description,
+        model=settings.openai_model,
+    )
+    if not due_date:
+        raise HTTPException(status_code=502, detail="Could not estimate a due date")
+    return DueDateEstimateResponse(due_date=due_date)
+
+
 @router.get("/{todo_id}", response_model=TodoOut)
 def get_todo(todo_id: str, current_user: CurrentUserDep, db: SupabaseDep):
     todo = todo_repo.get_todo(db, todo_id)
@@ -139,7 +156,6 @@ def create_todo(
     body: TodoCreate,
     current_user: CurrentUserDep,
     db: SupabaseDep,
-    background_tasks: BackgroundTasks,
 ):
     assignees = _assignee_payload(body.assignees, body.assigned_to_id, body.assigned_to_name)
     data = {
@@ -150,15 +166,9 @@ def create_todo(
         "due_date": body.due_date,
         "recurrence_interval": body.recurrence_interval,
         "recurrence_unit": body.recurrence_unit,
-        # The one and only trigger for AI time estimation: the background task
-        # below estimates this task once, then the status moves to a terminal
-        # done/failed. Edits never re-trigger estimation.
-        "estimate_status": "pending",
     }
     todo = todo_repo.create_todo(db, data, assignees)
     _notify_new_assignees(db, current_user, todo, set())
-    if todo.get("id"):
-        background_tasks.add_task(todo_estimate_service.generate_estimate, db, todo["id"])
     return TodoOut(**todo)
 
 
@@ -172,6 +182,7 @@ def update_todo(todo_id: str, body: TodoUpdate, current_user: CurrentUserDep, db
     uid = str(current_user["id"])
     is_assigner = str(existing.get("assigned_by_id")) == uid
     is_assignee = any(str(a["id"]) == uid for a in existing.get("assignees", []))
+    is_super = _is_super_user(current_user)
 
     provided = body.model_dump(exclude_unset=True)
     assignees_provided = "assignees" in provided or "assigned_to_id" in provided or "assigned_to_name" in provided
@@ -186,9 +197,13 @@ def update_todo(todo_id: str, body: TodoUpdate, current_user: CurrentUserDep, db
         assignees_provided = True
         assignees = []
 
-    if not is_assigner:
-        if not is_assignee:
-            raise HTTPException(status_code=403, detail="Only the person who assigned or is assigned this task can change it")
+    if not is_assigner and not is_assignee and not is_super:
+        raise HTTPException(status_code=403, detail="Only the person who assigned or is assigned this task can change it")
+
+    # Ticking a task off (or unticking it) is reserved for the task's creator;
+    # the super user can complete anyone's task.
+    if "is_done" in provided and not is_assigner and not is_super:
+        raise HTTPException(status_code=403, detail="Only the person who set this task can mark it done")
 
     if not provided and not assignees_provided:
         return TodoOut(**existing)

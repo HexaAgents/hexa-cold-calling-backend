@@ -82,6 +82,23 @@ def get_todos(db: Client) -> list[dict]:
     return _attach_assignees(db, result.data or [])
 
 
+def get_overdue_todos(db: Client, today: str) -> list[dict]:
+    """Open todos whose due date has passed, with assignees attached.
+
+    `today` is an ISO date string (YYYY-MM-DD); a todo is overdue when its
+    due_date is strictly before it.
+    """
+    result = (
+        db.table("todos")
+        .select("*")
+        .eq("is_done", False)
+        .lt("due_date", today)
+        .order("due_date", desc=False)
+        .execute()
+    )
+    return _attach_assignees(db, result.data or [])
+
+
 def get_todo(db: Client, todo_id: str) -> dict | None:
     result = db.table("todos").select("*").eq("id", todo_id).execute()
     rows = _attach_assignees(db, result.data or [])
@@ -117,26 +134,3 @@ def delete_todo(db: Client, todo_id: str) -> bool:
 def mark_recurrence_spawned(db: Client, todo_id: str) -> None:
     """Record that this row's completion already created the next occurrence."""
     db.table("todos").update({"recurrence_spawned": True}).eq("id", todo_id).execute()
-
-
-def set_estimate(db: Client, todo_id: str, fields: dict) -> None:
-    """Write estimate columns directly, bypassing assignee mirroring."""
-    db.table("todos").update(fields).eq("id", todo_id).execute()
-
-
-def get_calibration_examples(db: Client, limit: int = 10) -> list[dict]:
-    """Recent completed tasks with reported actual hours, newest first.
-
-    Used as few-shot calibration examples in the estimation prompt. Bounded by
-    `limit` (default 10) so the prompt can never grow unbounded.
-    """
-    result = (
-        db.table("todos")
-        .select("title, estimated_hours_min, estimated_hours_max, actual_hours")
-        .eq("is_done", True)
-        .not_.is_("actual_hours", "null")
-        .order("updated_at", desc=True)
-        .limit(limit)
-        .execute()
-    )
-    return result.data or []

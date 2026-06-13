@@ -670,7 +670,7 @@ HTTP Request
 | `sms.py` | `/sms` | `POST /send`, `POST /schedule` | `sms_service` |
 | `notes.py` | *(none)* | `GET /contacts/{id}/notes`, `POST /contacts/{id}/notes`, `PATCH /notes/{id}`, `DELETE /notes/{id}` | `note_repo` |
 | `settings.py` | `/settings` | `GET /`, `PUT /` | `settings_repo` |
-| `todos.py` | `/todos` | `GET /`, `GET /assignees`, `GET /{id}`, `POST /`, `PATCH /{id}`, `DELETE /{id}` | `todo_repo`, `email_service` for assignment notifications, `todo_estimate_service` (one background AI time estimate per created task; PATCH never re-estimates) |
+| `todos.py` | `/todos` | `GET /`, `GET /assignees`, `POST /estimate-due-date`, `GET /{id}`, `POST /`, `PATCH /{id}`, `DELETE /{id}` | `todo_repo`, `email_service` for assignment notifications, `due_date_estimator` (one stateless OpenAI call recommending a due date for the create dialog) |
 | `companies.py` | `/companies` | `GET /`, `GET /detail`, `GET /flag`, `PUT /flag`, `DELETE /flag` | `contact_repo`, `company_flag_repo` |
 
 > Additional routers mounted in `app/main.py` (`scheduled_calls`, `apollo_webhooks`, `apollo_enrichment`, `productivity`, and `email`) follow the same structural contract described above. Keep this quick reference current when adding endpoints so the API surface can be audited from one place.

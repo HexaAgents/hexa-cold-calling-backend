@@ -12,6 +12,7 @@ from app.dependencies import get_supabase
 from app.repositories import import_batch_repo
 from app.routers import auth, contacts, companies, imports, calls, scheduled_calls, twilio_webhooks, sms, notes, settings as settings_router, apollo_webhooks, apollo_enrichment, productivity, email, todos
 from app.services import apollo_service, reactivation_service
+from app.tasks.overdue_digest import run_overdue_digest_scheduler
 from app.tasks.sms_scheduler import run_sms_scheduler
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -86,12 +87,14 @@ async def lifespan(app: FastAPI):
     sweep_task = asyncio.create_task(_sweep_stale_imports_loop())
     enrich_task = asyncio.create_task(_sweep_enrichment_loop())
     reactivate_task = asyncio.create_task(_reactivate_stale_didnt_pickup_loop())
+    overdue_digest_task = asyncio.create_task(run_overdue_digest_scheduler())
     yield
+    overdue_digest_task.cancel()
     reactivate_task.cancel()
     enrich_task.cancel()
     sweep_task.cancel()
     sms_task.cancel()
-    for t in (reactivate_task, enrich_task, sweep_task, sms_task):
+    for t in (overdue_digest_task, reactivate_task, enrich_task, sweep_task, sms_task):
         try:
             await t
         except asyncio.CancelledError:

@@ -96,34 +96,3 @@ class TestSpawnNextOccurrence:
         todo = _recurring_todo(recurrence_spawned=True)
         assert spawn_next_occurrence(MagicMock(), todo) is None
         mock_repo.create_todo.assert_not_called()
-
-    def test_carries_finished_estimate_without_reestimating(self, mock_repo):
-        mock_repo.create_todo.return_value = {"id": "todo-2"}
-        todo = _recurring_todo(
-            estimate_status="done", estimated_hours_min=1.0, estimated_hours_max=2.5
-        )
-
-        spawn_next_occurrence(MagicMock(), todo)
-
-        data = mock_repo.create_todo.call_args[0][1]
-        assert data["estimate_status"] == "done"
-        assert data["estimated_hours_min"] == 1.0
-        assert data["estimated_hours_max"] == 2.5
-
-    def test_pending_or_failed_estimate_not_carried(self, mock_repo):
-        mock_repo.create_todo.return_value = {"id": "todo-2"}
-        todo = _recurring_todo(estimate_status="failed", estimated_hours_min=1.0)
-
-        spawn_next_occurrence(MagicMock(), todo)
-
-        data = mock_repo.create_todo.call_args[0][1]
-        assert data["estimate_status"] is None
-        assert data["estimated_hours_min"] is None
-
-    def test_actual_hours_not_copied(self, mock_repo):
-        mock_repo.create_todo.return_value = {"id": "todo-2"}
-
-        spawn_next_occurrence(MagicMock(), _recurring_todo(actual_hours=3.0))
-
-        data = mock_repo.create_todo.call_args[0][1]
-        assert "actual_hours" not in data
